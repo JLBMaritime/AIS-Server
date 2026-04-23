@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Outgoing data{% endblock %}
+{% block content %}
+<h2>Outgoing data</h2>
+<div class="toolbar">
+  <label>Filter by endpoint
+    <select id="filter-endpoint"><option value="">All endpoints</option></select>
+  </label>
+  <button id="toggle-pause" class="small">Pause</button>
+  <button class="small" onclick="ais.clearStream('outgoing')">Clear</button>
+  <button class="small" onclick="ais.exportCsv('outgoing')">Export CSV</button>
+</div>
+<pre class="stream" id="stream-outgoing"></pre>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.dataOut();</script>
+{% endblock %}

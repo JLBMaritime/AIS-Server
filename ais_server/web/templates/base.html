@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }}{% block title_suffix %}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="logo" class="logo">
+      <h1>{{ app_name }}</h1>
+    </div>
+    {% if current_user.is_authenticated %}
+    <nav>
+      <a href="{{ url_for('views.dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('views.nodes') }}">Nodes</a>
+      <a href="{{ url_for('views.data_in') }}">Incoming</a>
+      <a href="{{ url_for('views.data_out') }}">Outgoing</a>
+      <a href="{{ url_for('views.endpoints') }}">Endpoints</a>
+      <a href="{{ url_for('views.wifi') }}">Wi-Fi</a>
+      <a href="{{ url_for('views.system') }}">System</a>
+      <a href="{{ url_for('auth.logout') }}" class="logout">Logout</a>
+    </nav>
+    {% endif %}
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-messages">
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>JLBMaritime AIS-Server &middot; <span id="footer-year"></span></footer>
+
+  <script>document.getElementById('footer-year').textContent = new Date().getFullYear();</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

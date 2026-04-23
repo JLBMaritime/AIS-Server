@@ -1,0 +1,110 @@
+/* JLBMaritime AIS-Server — reuses wifi-manager palette */
+:root {
+  --primary:   #1c2346;
+  --secondary: #137dc5;
+  --bg:        #252a34;
+  --card:      #2f3545;
+  --text:      #e8ecf1;
+  --muted:     #9aa3b2;
+  --ok:        #3bd671;
+  --warn:      #e4a93c;
+  --err:       #e74c3c;
+  --border:    #3a4255;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif; font-size: 14px; }
+a { color: var(--secondary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: rgba(255,255,255,0.08); padding: 2px 4px; border-radius: 3px; }
+
+/* ------------- header ------------- */
+header {
+  background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 24px; border-bottom: 3px solid var(--secondary);
+  flex-wrap: wrap;
+}
+header .brand { display: flex; align-items: center; gap: 12px; }
+header .logo { width: 40px; height: 40px; }
+header h1 { margin: 0; font-size: 20px; font-weight: 600; color: #fff; }
+header nav { display: flex; gap: 4px; flex-wrap: wrap; }
+header nav a {
+  color: #dfe4f0; padding: 8px 14px; border-radius: 4px;
+  font-weight: 500;
+}
+header nav a:hover { background: rgba(255,255,255,0.08); text-decoration: none; }
+header nav a.logout { background: var(--secondary); color: #fff; }
+
+/* ------------- main / cards ------------- */
+main { max-width: 1200px; margin: 24px auto; padding: 0 24px; }
+h2 { color: #fff; margin: 8px 0 18px; }
+h3 { color: #fff; margin: 8px 0 12px; font-size: 16px; }
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 18px; margin-bottom: 18px;
+}
+.card.narrow { max-width: 440px; margin: 40px auto; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 14px; margin-bottom: 18px; }
+.grid .card { margin: 0; text-align: center; }
+.grid .big { font-size: 30px; font-weight: 700; color: var(--secondary); margin-top: 6px; }
+
+/* ------------- forms ------------- */
+form label { display: block; margin: 10px 0; color: var(--text); }
+form label.inline { display: inline-flex; align-items: center; gap: 6px; }
+form.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+input[type=text], input[type=password], input[type=number], select {
+  background: #1b2030; color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 8px 10px; width: 100%; font: inherit;
+}
+form.row input, form.row select { width: auto; min-width: 140px; }
+input:focus, select:focus { outline: 2px solid var(--secondary); }
+
+button, .button {
+  cursor: pointer; border: 0; border-radius: 4px; padding: 8px 14px;
+  font: inherit; color: #fff; background: #474d5e;
+}
+button.primary, .button.primary { background: var(--secondary); }
+button.small, .button.small { padding: 4px 10px; font-size: 13px; }
+button:hover, .button:hover { filter: brightness(1.15); }
+button.danger { background: var(--err); }
+
+.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+
+/* ------------- tables ------------- */
+table.data { width: 100%; border-collapse: collapse; background: var(--card);
+  border-radius: 6px; overflow: hidden; margin-bottom: 18px; }
+table.data th, table.data td {
+  text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+table.data th { background: #1b2030; color: var(--muted); font-weight: 600; font-size: 12px;
+                text-transform: uppercase; letter-spacing: 0.5px; }
+table.data tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px;
+        font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.pill.ok   { background: rgba(59,214,113,0.15); color: var(--ok); }
+.pill.err  { background: rgba(231,76,60,0.15);  color: var(--err); }
+.pill.warn { background: rgba(228,169,60,0.15); color: var(--warn); }
+
+/* ------------- flash messages ------------- */
+.flash-messages { margin-bottom: 12px; }
+.flash { padding: 10px 14px; border-radius: 4px; margin-bottom: 8px; }
+.flash.error   { background: rgba(231,76,60,0.15); color: var(--err); border: 1px solid var(--err); }
+.flash.success { background: rgba(59,214,113,0.15); color: var(--ok);  border: 1px solid var(--ok); }
+
+/* ------------- data streams ------------- */
+.stream { background: #0e1118; color: #d0d6e2; padding: 12px; border-radius: 6px;
+          max-height: 60vh; overflow-y: auto; font-family: "SFMono-Regular", Consolas, monospace;
+          font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+
+/* ------------- misc ------------- */
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+footer { text-align: center; color: var(--muted); padding: 24px 0 40px;
+         font-size: 12px; }

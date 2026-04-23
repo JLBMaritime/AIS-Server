@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Endpoints{% endblock %}
+{% block content %}
+<h2>Endpoints</h2>
+
+<div class="card">
+  <h3>Add / edit endpoint</h3>
+  <form id="ep-form" class="row">
+    <input type="hidden" name="id">
+    <input type="text" name="name" placeholder="Name (unique)" required>
+    <select name="protocol">
+      <option value="tcp" selected>TCP</option>
+      <!-- UDP / HTTP hidden until enabled in config -->
+    </select>
+    <input type="text" name="host" placeholder="Host / IP" required>
+    <input type="number" name="port" placeholder="Port" min="1" max="65535" required>
+    <label class="inline"><input type="checkbox" name="enabled" checked> Enabled</label>
+    <button class="primary" type="submit">Save</button>
+    <button type="button" class="small" onclick="ais.clearForm()">Clear</button>
+  </form>
+</div>
+
+<table class="data" id="ep-tbl">
+  <thead><tr><th>Name</th><th>Protocol</th><th>Host</th><th>Port</th><th>Enabled</th><th>Actions</th></tr></thead>
+  <tbody></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.endpoints();</script>
+{% endblock %}

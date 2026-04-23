@@ -1,0 +1,66 @@
+# /etc/ais-server/config.yaml
+# AIS-Server runtime configuration.  Safe to edit – the service auto-reloads
+# on SIGHUP (`sudo systemctl reload ais-server`) or a full restart.
+
+ingest:
+  # TCP port AIS nodes push NMEA sentences to.  Standard AIS port = 10110.
+  tcp_port: 10110
+  # Bind address (0.0.0.0 accepts on every interface; firewall restricts origin).
+  bind: "0.0.0.0"
+  # Maximum concurrent node connections.
+  max_clients: 64
+  # Idle timeout (seconds) – a silent socket is dropped after this long.
+  idle_timeout: 120
+
+dedup:
+  # Window in which duplicates of the same sentence (from different nodes)
+  # are collapsed.  Larger = more dedup across laggy nodes, uses more RAM.
+  ttl_seconds: 30
+  # Safety cap on number of hashes cached.
+  max_entries: 200000
+
+reorder:
+  # Jitter-buffer hold time in milliseconds.  Sentences are released in
+  # timestamp order once `now - ts >= hold_ms`.  Must be well below 10 000
+  # to satisfy the <10 s latency requirement.
+  hold_ms: 2000
+  # Safety cap on queued (undelivered) sentences.
+  max_queue: 50000
+
+forwarder:
+  # Default protocol for new endpoints.  Supported: tcp.  (udp / http
+  # scaffolded for a future release – UI hides them until enabled here.)
+  default_protocol: tcp
+  # Per-endpoint bounded queue.  When full, oldest entries are dropped.
+  queue_size: 10000
+  # How many times to retry a failed endpoint (exponential backoff).
+  max_retries: 10
+  # Initial backoff (seconds) – doubles each retry up to 30 s cap.
+  backoff_initial: 1.0
+
+web:
+  host: "0.0.0.0"
+  port: 80
+  # Set to a valid cert / key pair to force HTTPS.  Leave null for HTTP only.
+  tls_cert: null
+  tls_key: null
+  # Secret key used for session signing.  Auto-generated on first run and
+  # stored in /var/lib/ais-server/secret_key if this stays empty.
+  secret_key: ""
+
+security:
+  force_password_change_on_first_login: true
+  # bcrypt cost factor (higher = slower = more secure).  12 is a good RPi 4 default.
+  bcrypt_rounds: 12
+  # Session lifetime in minutes.
+  session_minutes: 240
+
+logging:
+  path: "/var/log/ais-server"
+  level: "INFO"           # DEBUG / INFO / WARNING / ERROR
+
+# Paths – normally you don't need to change these.
+paths:
+  db:      "/var/lib/ais-server/ais.db"
+  secret:  "/var/lib/ais-server/secret_key"
+  backup:  "/var/lib/ais-server/backups"

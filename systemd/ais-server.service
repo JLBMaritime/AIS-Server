@@ -1,0 +1,40 @@
+[Unit]
+Description=JLBMaritime AIS-Server
+Documentation=https://github.com/JLBMaritime/AIS-Server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WorkingDirectory=/opt/ais-server
+ExecStart=/opt/ais-server/.venv/bin/python -m ais_server
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+WatchdogSec=30
+TimeoutStopSec=15
+
+# Run as root so the wifi / systemctl helpers work; drop privs for everything
+# else via Python-level sandboxing.  If you prefer, create a `ais` user and
+# set User=ais + grant sudoers for nmcli/systemctl.
+User=root
+Group=root
+
+# Stability / resource guard-rails
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/etc/ais-server /var/log/ais-server /var/lib/ais-server
+
+StandardOutput=append:/var/log/ais-server/ais-server.log
+StandardError=append:/var/log/ais-server/ais-server.log
+
+[Install]
+WantedBy=multi-user.target

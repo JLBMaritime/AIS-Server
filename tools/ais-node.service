@@ -1,0 +1,21 @@
+# AIS-Node -> AIS-Server forwarder (to be installed on each RPi AIS node).
+# Expects a local AIS receiver feeding NMEA to TCP 127.0.0.1:10110 (rtl-ais
+# default) and uses socat to forward those lines over the Tailnet to the
+# central server.  Drop into /etc/systemd/system/ais-node.service, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ais-node
+[Unit]
+Description=AIS-Node forwarder -> central AIS-Server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+# Replace SERVER with the Tailscale MagicDNS name of your central server,
+# e.g. ais-server.tailnet-xxxx.ts.net
+Environment=SERVER=ais-server
+Environment=PORT=10110
+ExecStart=/bin/sh -c 'exec socat -u TCP4-LISTEN:10110,reuseaddr,fork TCP4:$SERVER:$PORT,forever,reconnect=1'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Dashboard{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+<div class="grid">
+  <div class="card"><h3>Messages / sec</h3><div class="big" id="msgs_per_sec">—</div></div>
+  <div class="card"><h3>Unique MMSI (10 min)</h3><div class="big" id="unique_mmsi">—</div></div>
+  <div class="card"><h3>Nodes connected</h3><div class="big" id="nodes_connected">—</div></div>
+  <div class="card"><h3>Uptime</h3><div class="big" id="uptime">—</div></div>
+  <div class="card"><h3>Dedup rate</h3><div class="big" id="dedup_rate">—</div></div>
+  <div class="card"><h3>Reorder queue</h3><div class="big" id="queue_size">—</div></div>
+</div>
+
+<h3>Endpoints</h3>
+<table class="data" id="ep-tbl">
+  <thead><tr><th>Name</th><th>Target</th><th>Status</th><th>Sent</th><th>Queue</th><th>Last error</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h3>Nodes</h3>
+<table class="data" id="node-tbl">
+  <thead><tr><th>Peer</th><th>State</th><th>Msgs</th><th>Invalid</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.dashboard();</script>
+{% endblock %}

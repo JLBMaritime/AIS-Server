@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Wi-Fi{% endblock %}
+{% block content %}
+<h2>Wi-Fi</h2>
+
+<div class="card">
+  <h3>Current connection</h3>
+  <div id="wifi-current" class="muted">Loading…</div>
+</div>
+
+<div class="card">
+  <h3>Available networks <button class="small" onclick="ais.wifiScan()">Rescan</button></h3>
+  <table class="data" id="wifi-scan">
+    <thead><tr><th>SSID</th><th>Signal</th><th>Security</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Saved networks</h3>
+  <table class="data" id="wifi-saved">
+    <thead><tr><th>SSID</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.wifi();</script>
+{% endblock %}

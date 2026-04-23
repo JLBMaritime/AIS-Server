@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title_suffix %} — System{% endblock %}
+{% block content %}
+<h2>System</h2>
+
+<div class="card">
+  <h3>Change password</h3>
+  <form id="pw-form" class="row">
+    <input type="password" name="current_password" placeholder="Current password" required>
+    <input type="password" name="new_password" placeholder="New password (min 8)" minlength="8" required>
+    <button class="primary" type="submit">Update</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Backup / restore</h3>
+  <p class="muted">Downloads a gzipped tarball of the config and the SQLite
+    database.</p>
+  <a class="button" href="{{ url_for('api.backup') }}">Download backup</a>
+</div>
+
+<div class="card">
+  <h3>Service control</h3>
+  <button class="small" onclick="ais.restart()">Restart service</button>
+  <button class="small" onclick="ais.reboot()">Reboot Pi</button>
+  <p class="muted small">These actions are irreversible and will briefly
+    interrupt ingest.</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.system();</script>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Nodes{% endblock %}
+{% block content %}
+<h2>Connected AIS nodes</h2>
+<table class="data" id="nodes-tbl">
+  <thead><tr><th>Peer</th><th>IP</th><th>State</th><th>Messages</th><th>Invalid</th><th>Bytes</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>ais.nodes();</script>
+{% endblock %}

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ais-server"
+version = "1.0.0"
+description = "JLBMaritime AIS aggregation / dedup / reorder / forwarder server"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "JLBMaritime" }]
+requires-python = ">=3.9"
+dependencies = [
+    "Flask>=3.0",
+    "Flask-Login>=0.6",
+    "Flask-SocketIO>=5.3",
+    "python-socketio>=5.11",
+    "python-engineio>=4.9",
+    "eventlet>=0.36",
+    "Werkzeug>=3.0",
+    "bcrypt>=4.1",
+    "PyYAML>=6.0",
+    "cachetools>=5.3",
+    "typer>=0.12",
+    "rich>=13.7",
+    "psutil>=5.9",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+aisctl = "ais_server.cli:app"
+ais-server = "ais_server.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ais_server*"]
+
+[tool.setuptools.package-data]
+"ais_server.web" = ["templates/*.html", "static/**/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
