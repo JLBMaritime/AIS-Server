@@ -8,8 +8,8 @@ Wires everything together and runs forever:
 4. Build Pipeline (dedup / reorder / node-registry).
 5. Start TCP ingest listener + output loop + endpoint-sync loop, each under
    SupervisedThread so they restart automatically on any exception.
-6. Start the Flask + Socket.IO web app (blocking, runs in main thread via
-   eventlet).  The Watchdog thread pings systemd every 10 s.
+6. Start the Flask + Socket.IO web app (blocking, runs in main thread in
+   ``threading`` async mode).  The Watchdog thread pings systemd every 10 s.
 """
 from __future__ import annotations
 

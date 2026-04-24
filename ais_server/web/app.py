@@ -76,8 +76,11 @@ def create_app(cfg: Dict[str, Any], db: Database, pipeline: Pipeline,
         }
 
     # ------------------------------------------------------------------
+    # Python 3.13 currently breaks eventlet's threading monkey-patch, so we
+    # use the plain "threading" async mode.  WebSocket transport still works
+    # thanks to simple-websocket; long-polling is the fallback.
     socketio = SocketIO(app, cors_allowed_origins="*",
-                        async_mode="eventlet", ping_interval=15,
+                        async_mode="threading", ping_interval=15,
                         ping_timeout=30)
 
     from .sockets import register_sockets

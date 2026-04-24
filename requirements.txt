@@ -4,7 +4,12 @@ Flask-Login==0.6.3
 Flask-SocketIO==5.3.6
 python-socketio==5.11.2
 python-engineio==4.9.0
-eventlet==0.36.1
+# NOTE: We intentionally do NOT use eventlet or gevent.
+# Python 3.13 (RPi OS Trixie) broke eventlet's monkey-patched `_thread` shim
+# (missing `start_joinable_thread`), so Flask-SocketIO is configured for
+# async_mode="threading" in web/app.py.  simple-websocket provides the
+# WebSocket transport in that mode.
+simple-websocket>=1.1.0
 Werkzeug==3.0.3
 bcrypt==4.1.3
 # NOTE: psutil 5.9.x and PyYAML 6.0.1 have no prebuilt wheels for Python 3.13

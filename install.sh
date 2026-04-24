@@ -78,6 +78,9 @@ if [[ ! -d "${INSTALL_DIR}/.venv" ]]; then
   python3 -m venv "${INSTALL_DIR}/.venv"
 fi
 "${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip wheel
+# Remove eventlet if a previous install pulled it in – it's incompatible with
+# Python 3.13 (RPi OS Trixie) and has been replaced by async_mode="threading".
+"${INSTALL_DIR}/.venv/bin/pip" uninstall -y eventlet >/dev/null 2>&1 || true
 "${INSTALL_DIR}/.venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
 "${INSTALL_DIR}/.venv/bin/pip" install -e "${INSTALL_DIR}"
 
