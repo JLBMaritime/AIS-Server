@@ -27,9 +27,19 @@ header {
   padding: 10px 24px; border-bottom: 3px solid var(--secondary);
   flex-wrap: wrap;
 }
-header .brand { display: flex; align-items: center; gap: 12px; }
-header .logo { width: 40px; height: 40px; }
+header .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+header .logo {
+  height: 48px;          /* bigger on desktop */
+  width: auto;           /* preserve aspect ratio */
+  max-width: 260px;
+  object-fit: contain;
+  display: block;
+}
 header h1 { margin: 0; font-size: 20px; font-weight: 600; color: #fff; }
+@media (max-width: 640px) {
+  header .logo { height: 36px; max-width: 180px; }
+  header h1    { font-size: 18px; }
+}
 header nav { display: flex; gap: 4px; flex-wrap: wrap; }
 header nav a {
   color: #dfe4f0; padding: 8px 14px; border-radius: 4px;
