@@ -2,8 +2,19 @@
 {% block title_suffix %} — Nodes{% endblock %}
 {% block content %}
 <h2>Connected AIS nodes</h2>
+<p class="muted small">
+  Rows are keyed by the node's <code>s:</code> tag-block ID when present,
+  otherwise by its IP address. <em>Sessions</em> counts TCP reconnects
+  from the same logical node.
+</p>
 <table class="data" id="nodes-tbl">
-  <thead><tr><th>Peer</th><th>IP</th><th>State</th><th>Messages</th><th>Invalid</th><th>Bytes</th><th>Last seen</th></tr></thead>
+  <thead>
+    <tr>
+      <th>Node</th><th>IP</th><th>State</th><th>Sessions</th>
+      <th>Messages</th><th>Invalid</th><th>Bytes</th>
+      <th>First seen</th><th>Last seen</th>
+    </tr>
+  </thead>
   <tbody></tbody>
 </table>
 {% endblock %}

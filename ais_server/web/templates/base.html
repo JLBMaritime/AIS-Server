@@ -5,13 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ app_name }}{% block title_suffix %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/favicon.png') }}">
   {% block head %}{% endblock %}
 </head>
 <body>
   <header>
     <div class="brand">
-      <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="logo" class="logo">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="logo" class="logo">
       <h1>{{ app_name }}</h1>
     </div>
     {% if current_user.is_authenticated %}

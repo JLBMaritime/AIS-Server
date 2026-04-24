@@ -84,14 +84,27 @@
   async function refreshNodes() {
     const s = await api('/status');
     const body = el('#nodes-tbl tbody');
-    body.innerHTML = s.nodes.map(n =>
-      `<tr><td>${n.peer}</td><td>${n.host}</td>
-         <td>${n.connected ? '<span class="pill ok">ON</span>'
-                           : '<span class="pill warn">OFF</span>'}</td>
-         <td>${n.messages}</td><td>${n.invalid}</td>
+    body.innerHTML = s.nodes.map(n => {
+      const label = n.source_id
+        ? `${n.source_id} <span class="muted small">(${n.host})</span>`
+        : n.host;
+      const state = n.connected
+        ? `<span class="pill ok">ON</span>`
+        : `<span class="pill warn">OFF</span>`;
+      const sessions = `${n.active_sessions || 0} / ${n.sessions || 0}`;
+      return `<tr>
+         <td>${label}</td>
+         <td>${n.host}</td>
+         <td>${state}</td>
+         <td title="active / total">${sessions}</td>
+         <td>${n.messages}</td>
+         <td>${n.invalid}</td>
          <td>${fmtBytes(n.bytes_rx)}</td>
-         <td>${fmtRel(n.last_seen)}</td></tr>`).join('') ||
-      '<tr><td colspan="7" class="muted">No nodes connected.</td></tr>';
+         <td>${fmtRel(n.first_seen)}</td>
+         <td>${fmtRel(n.last_seen)}</td>
+       </tr>`;
+    }).join('') ||
+    '<tr><td colspan="9" class="muted">No nodes connected.</td></tr>';
   }
 
   // ------------------- WI-FI -------------------

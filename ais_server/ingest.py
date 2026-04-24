@@ -3,10 +3,19 @@
 Model
 -----
 * One listening socket bound to ``ingest.bind:ingest.tcp_port``.
-* One worker thread per connected node (max ``ingest.max_clients``).
+* One worker thread per connected TCP session (max ``ingest.max_clients``).
 * Each worker reads CR/LF delimited lines, normalises them, and hands every
   valid AIS sentence to the ``pipeline`` callback.
-* The node tracker maps peer IPs → :class:`NodeInfo` for the Nodes page.
+* ``NodeRegistry`` aggregates stats **per logical node**.  A logical node is
+  keyed by:
+
+    1. the ``s:<id>`` field in a leading ``\\…\\`` tag-block (preferred –
+       stable across IP changes / Tailscale roaming), OR
+    2. the peer **host IP** (so reconnects from the same node don't spam
+       the Nodes page with duplicate rows).
+
+* TCP keepalive is enabled on every accepted socket so dead peers are
+  evicted in ~2 minutes even if they never sent a FIN.
 
 All exceptions are contained per-connection so one misbehaving node cannot
 take the listener down.
@@ -18,49 +27,98 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional, Tuple
 
 from .nmea import parse
 
 log = logging.getLogger(__name__)
 
+# TCP keepalive tunables — 60 s idle before first probe, then 5 probes
+# every 20 s (≈ 160 s total to evict a dead peer).
+_KEEPIDLE = 60
+_KEEPINTVL = 20
+_KEEPCNT = 5
+
 
 @dataclass
 class NodeInfo:
-    peer: str                       # "ip:port"
-    host: str                       # just the IP
-    connected_at: float
+    """One *logical* node – may aggregate multiple TCP sessions."""
+    key: str                       # primary key: source_id or host
+    host: str                      # last-known peer IP
+    source_id: Optional[str]       # tag-block s:… if any
+    first_seen: float
     last_seen: float = 0.0
+    connected_at: float = 0.0
     messages: int = 0
     invalid: int = 0
     bytes_rx: int = 0
-    connected: bool = True
-    # Multi-part AIS reassembly buffer, keyed by message_id.
+    sessions: int = 0              # total sessions since start
+    active_sessions: int = 0       # currently open
+    last_peer: str = ""            # "ip:port" of most-recent session
+    # Multi-part AIS reassembly buffer, keyed by message_id.  Lives on the
+    # logical node so fragments crossing a quick reconnect still match.
     multipart: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def connected(self) -> bool:
+        return self.active_sessions > 0
 
 
 class NodeRegistry:
-    """Thread-safe registry of currently / recently connected nodes."""
+    """Thread-safe registry of nodes keyed by source-id or host IP."""
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._nodes: Dict[str, NodeInfo] = {}   # keyed by "ip:port"
+        self._nodes: Dict[str, NodeInfo] = {}
 
-    def on_connect(self, peer: str, host: str) -> NodeInfo:
-        info = NodeInfo(peer=peer, host=host,
-                        connected_at=time.time(), last_seen=time.time())
+    # ------------------------------------------------------------------
+    def on_session_start(self, peer: str, host: str,
+                         source_id: Optional[str] = None) -> NodeInfo:
+        key = source_id or host
+        now = time.time()
         with self._lock:
-            self._nodes[peer] = info
-        return info
+            info = self._nodes.get(key)
+            if info is None:
+                info = NodeInfo(
+                    key=key, host=host, source_id=source_id,
+                    first_seen=now, last_seen=now, connected_at=now,
+                )
+                self._nodes[key] = info
+            info.last_peer = peer
+            info.host = host
+            info.sessions += 1
+            info.active_sessions += 1
+            info.connected_at = now
+            info.last_seen = now
+            return info
 
-    def on_disconnect(self, peer: str) -> None:
+    def on_session_end(self, key: str) -> None:
         with self._lock:
-            if peer in self._nodes:
-                self._nodes[peer].connected = False
+            info = self._nodes.get(key)
+            if info and info.active_sessions > 0:
+                info.active_sessions -= 1
 
-    def touch(self, peer: str, nbytes: int, msg: bool, invalid: bool = False
-              ) -> None:
+    def set_source_id(self, old_key: str, source_id: str) -> NodeInfo:
+        """Upgrade a host-keyed node to a source-id-keyed node when the
+        first tag-block arrives mid-session.  Preserves counters."""
         with self._lock:
-            info = self._nodes.get(peer)
+            if old_key == source_id or source_id in self._nodes:
+                # Already using source_id key (or one exists) – just return it.
+                return self._nodes.get(source_id) or self._nodes[old_key]
+            info = self._nodes.pop(old_key, None)
+            if info is None:
+                return self._nodes.setdefault(
+                    source_id,
+                    NodeInfo(key=source_id, host="", source_id=source_id,
+                             first_seen=time.time(), last_seen=time.time()))
+            info.key = source_id
+            info.source_id = source_id
+            self._nodes[source_id] = info
+            return info
+
+    def touch(self, key: str, nbytes: int, msg: bool,
+              invalid: bool = False) -> None:
+        with self._lock:
+            info = self._nodes.get(key)
             if not info:
                 return
             info.last_seen = time.time()
@@ -75,19 +133,53 @@ class NodeRegistry:
             out = []
             for n in self._nodes.values():
                 out.append({
-                    "peer": n.peer, "host": n.host,
+                    # Back-compat: "peer" is what the old UI expected; now it
+                    # shows the logical key (source-id or IP).
+                    "peer": n.key,
+                    "host": n.host,
+                    "source_id": n.source_id,
+                    "last_peer": n.last_peer,
+                    "first_seen": n.first_seen,
                     "connected_at": n.connected_at,
                     "last_seen": n.last_seen,
                     "messages": n.messages,
                     "invalid": n.invalid,
                     "bytes_rx": n.bytes_rx,
+                    "sessions": n.sessions,
+                    "active_sessions": n.active_sessions,
                     "connected": n.connected,
                 })
         return sorted(out, key=lambda x: (not x["connected"], -x["last_seen"]))
 
 
 # ---------------------------------------------------------------------------
-# Sentence handler – one per connection
+# Tag-block helper
+# ---------------------------------------------------------------------------
+def _strip_tag_block(line: str) -> Tuple[str, Optional[str]]:
+    """Return (sentence_without_tagblock, source_id_or_None).
+
+    NMEA 4.10 tag blocks look like:  ``\\s:GIB-01,c:1714063200*5C\\!AIVDM,...``
+    """
+    if not line.startswith("\\"):
+        return line, None
+    end = line.find("\\", 1)
+    if end < 0:
+        return line, None
+    block = line[1:end]
+    body = line[end + 1:]
+    # Strip the "*HH" checksum on the block itself, if present.
+    if "*" in block:
+        block = block.rsplit("*", 1)[0]
+    source_id: Optional[str] = None
+    for field in block.split(","):
+        if field.startswith("s:"):
+            source_id = field[2:].strip() or None
+            break
+    return body, source_id
+
+
+# ---------------------------------------------------------------------------
+# Sentence handler – one per TCP session
 # ---------------------------------------------------------------------------
 class _ConnectionHandler(threading.Thread):
     def __init__(self, sock: socket.socket, peer: tuple,
@@ -103,8 +195,12 @@ class _ConnectionHandler(threading.Thread):
         self.idle_timeout = idle_timeout
 
     def run(self) -> None:
-        info = self.registry.on_connect(self.peer, self.host)
-        log.info("Node connected: %s", self.peer)
+        # Start with host-keyed identity; upgrade to source-id if tag-blocks
+        # arrive on this session.
+        key = self.host
+        info = self.registry.on_session_start(self.peer, self.host)
+        log.info("Node session opened: peer=%s key=%s (sessions=%d)",
+                 self.peer, info.key, info.sessions)
         buf = b""
         try:
             self.sock.settimeout(self.idle_timeout)
@@ -118,14 +214,14 @@ class _ConnectionHandler(threading.Thread):
                 if not data:
                     break
                 buf += data
-                self.registry.touch(self.peer, len(data), msg=False)
+                self.registry.touch(key, len(data), msg=False)
                 # Split on \n – tolerate CR/LF and lone CR.
                 while True:
                     nl = buf.find(b"\n")
                     if nl < 0:
                         break
-                    line, buf = buf[:nl], buf[nl + 1:]
-                    self._handle_line(line, info)
+                    line_bytes, buf = buf[:nl], buf[nl + 1:]
+                    key = self._handle_line(line_bytes, info, key)
         except OSError as exc:
             log.info("Node %s socket error: %s", self.peer, exc)
         except Exception:  # noqa: BLE001
@@ -135,56 +231,41 @@ class _ConnectionHandler(threading.Thread):
                 self.sock.close()
             except OSError:
                 pass
-            self.registry.on_disconnect(self.peer)
-            log.info("Node disconnected: %s", self.peer)
+            self.registry.on_session_end(key)
+            log.info("Node session closed: peer=%s key=%s", self.peer, key)
 
     # ------------------------------------------------------------------
-    def _handle_line(self, raw: bytes, info: NodeInfo) -> None:
+    def _handle_line(self, raw: bytes, info: NodeInfo, key: str) -> str:
         try:
             line = raw.decode("ascii", errors="ignore").strip("\r\n\t ")
         except Exception:  # noqa: BLE001
-            self.registry.touch(self.peer, 0, msg=False, invalid=True)
-            return
+            self.registry.touch(key, 0, msg=False, invalid=True)
+            return key
         if not line:
-            return
-        # Strip tag-blocks ("\1G2:..\2!AIVDM,...")
-        if line.startswith("\\"):
-            idx = line.find("\\", 1)
-            if idx > 0:
-                line = line[idx + 1:]
-        parsed = parse(line)
-        if parsed is None or not parsed.checksum_ok:
-            self.registry.touch(self.peer, 0, msg=False, invalid=True)
-            return
+            return key
 
-        # Reassemble multi-part ( !AIVDM,2,1,7,... !AIVDM,2,2,7,... ).
-        if parsed.fragment_count > 1:
-            key = parsed.message_id or f"{parsed.channel}#{parsed.fragment_count}"
-            prev = info.multipart.get(key, "")
-            info.multipart[key] = (prev + "," if prev else "") + line
-            if parsed.fragment_number < parsed.fragment_count:
-                return
-            combined = info.multipart.pop(key)
-            # We forward all fragments individually as received – consumers
-            # expect them that way.  Emit each one to the pipeline:
-            ts = time.time()
-            for part in combined.split(","):
-                # skip the empty leading comma artifacts
-                if not part:
-                    continue
-                # Each original line already included commas so split-on-","
-                # doesn't work cleanly – instead, handle incrementally below.
-                pass
-            # Simpler: just forward each line at arrival time as it comes in.
-            # The trick above tries to group, but grouping is unnecessary here
-            # because dedup + reorder operate per-line.  Fall through:
+        sentence, source_id = _strip_tag_block(line)
+        if source_id and source_id != info.source_id:
+            # First time we've seen a source-id on this session – upgrade
+            # the registry entry so stats survive future reconnects.
+            info = self.registry.set_source_id(key, source_id)
+            key = source_id
+
+        parsed = parse(sentence)
+        if parsed is None or not parsed.checksum_ok:
+            self.registry.touch(key, 0, msg=False, invalid=True)
+            return key
 
         ts = time.time()
-        self.registry.touch(self.peer, 0, msg=True)
+        self.registry.touch(key, 0, msg=True)
         try:
-            self.on_sentence(line, self.peer, ts)
+            # Give the pipeline the logical key (source-id or host) as
+            # "peer", so the live-data view groups by node rather than
+            # ephemeral port.
+            self.on_sentence(sentence, key, ts)
         except Exception:  # noqa: BLE001
-            log.exception("on_sentence callback failed for %s", self.peer)
+            log.exception("on_sentence callback failed for %s", key)
+        return key
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +310,7 @@ class TcpIngest:
                     except OSError:
                         pass
                     continue
-                client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self._configure_client_socket(client)
                 handler = _ConnectionHandler(
                     client, peer, self.registry, self.on_sentence,
                     self.idle_timeout,
@@ -251,6 +332,24 @@ class TcpIngest:
                 self._server_sock.close()
             except OSError:
                 pass
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _configure_client_socket(sock: socket.socket) -> None:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux-specific keepalive tuning (harmless no-op elsewhere).
+        for name, val in (
+            ("TCP_KEEPIDLE",  _KEEPIDLE),
+            ("TCP_KEEPINTVL", _KEEPINTVL),
+            ("TCP_KEEPCNT",   _KEEPCNT),
+        ):
+            opt = getattr(socket, name, None)
+            if opt is not None:
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, opt, val)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
     def _reap(self) -> None:
