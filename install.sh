@@ -31,8 +31,9 @@ log "Updating apt and installing prerequisites…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-    git curl ca-certificates \
-    python3 python3-venv python3-pip \
+    git curl ca-certificates rsync \
+    python3 python3-venv python3-pip python3-dev \
+    build-essential libffi-dev \
     network-manager \
     sqlite3 \
     logrotate
