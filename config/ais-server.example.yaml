@@ -56,8 +56,26 @@ security:
   session_minutes: 240
 
 logging:
+  # Logs are written to stdout, captured by systemd-journald.  This `path`
+  # entry is kept for backwards-compatibility but is no longer used; tail the
+  # journal instead:  `journalctl -u ais-server -f`.
   path: "/var/log/ais-server"
   level: "INFO"           # DEBUG / INFO / WARNING / ERROR
+
+# Network self-test / auto-recovery.  On the Pi 4B the Broadcom Wi-Fi
+# firmware can wedge under low-traffic conditions; this thread probes the
+# default gateway every `interval` seconds and bounces wlan0 via nmcli after
+# `fail_threshold` consecutive failures.  Set auto_recover: false to log
+# only and never touch the interface.
+netcheck:
+  interval: 30            # seconds between probes
+  fail_threshold: 3       # consecutive failures that trigger a recovery
+  timeout: 4              # seconds per probe
+  host: null              # null = use the default-route gateway
+  port: 53                # TCP port to probe (53/DNS is almost always open)
+  interface: "wlan0"
+  auto_recover: true
+
 
 # Paths – normally you don't need to change these.
 paths:

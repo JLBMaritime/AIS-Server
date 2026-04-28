@@ -1,7 +1,7 @@
 [Unit]
 Description=JLBMaritime AIS-Server
 Documentation=https://github.com/JLBMaritime/AIS-Server
-After=network-online.target tailscaled.service
+After=network-online.target tailscaled.service NetworkManager.service
 Wants=network-online.target
 
 [Service]
@@ -12,7 +12,9 @@ ExecStart=/opt/ais-server/.venv/bin/python -m ais_server
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=2
-WatchdogSec=30
+# Allow up to 60s for a watchdog ping (the netcheck/recovery cycle can take
+# ~20s under a Wi-Fi bounce).
+WatchdogSec=60
 TimeoutStopSec=15
 
 # Run as root so the wifi / systemctl helpers work; drop privs for everything
@@ -21,9 +23,12 @@ TimeoutStopSec=15
 User=root
 Group=root
 
-# Stability / resource guard-rails
+# Stability / resource guard-rails.  TasksMax raised from the systemd default
+# of 512 because Flask-SocketIO in async_mode="threading" can briefly spike
+# the thread count under reconnect storms.
+MemoryHigh=512M
 MemoryMax=1G
-TasksMax=512
+TasksMax=2048
 LimitNOFILE=65536
 
 # Hardening
@@ -31,10 +36,13 @@ NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/etc/ais-server /var/log/ais-server /var/lib/ais-server
+ReadWritePaths=/etc/ais-server /var/lib/ais-server
 
-StandardOutput=append:/var/log/ais-server/ais-server.log
-StandardError=append:/var/log/ais-server/ais-server.log
+# Logs go to stdout -> journald (single source of truth – use
+# `journalctl -u ais-server -f` to follow).  Do NOT add StandardOutput=append:
+# here, that conflict with Python rotation has caused 24h freezes in the past.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

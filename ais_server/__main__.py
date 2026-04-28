@@ -14,19 +14,18 @@ Wires everything together and runs forever:
 from __future__ import annotations
 
 import logging
-import logging.handlers
 import os
 import signal
 import sys
 import threading
 import time
-from pathlib import Path
 
 from .config import load_config
 from .db import Database
 from .events import EventBus
 from .forwarder import ForwarderManager
 from .ingest import TcpIngest
+from .netcheck import NetCheck
 from .pipeline import Pipeline
 from .supervisor import SupervisedThread, Watchdog
 
@@ -36,27 +35,24 @@ _STOP = threading.Event()
 
 
 def _setup_logging(cfg: dict) -> None:
+    """Stdout-only logging.
+
+    systemd captures stdout into the journal; ``journalctl -u ais-server``
+    is the single source of truth.  We deliberately do **not** attach a
+    RotatingFileHandler here – running both Python rotation *and* systemd's
+    ``StandardOutput=append:`` *and* a logrotate.d entry against the same
+    file caused stale-FD writes (see commit history for the 24-hour-freeze
+    investigation).
+    """
     level = getattr(logging, str(cfg["logging"]["level"]).upper(), logging.INFO)
     fmt = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
     root = logging.getLogger()
     root.setLevel(level)
-    # Clear default handlers (systemd captures stdout already).
     for h in list(root.handlers):
         root.removeHandler(h)
-
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(logging.Formatter(fmt))
     root.addHandler(stream)
-
-    log_path = Path(cfg["logging"]["path"]) / "ais-server.log"
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=10_000_000, backupCount=5, encoding="utf-8")
-        fh.setFormatter(logging.Formatter(fmt))
-        root.addHandler(fh)
-    except PermissionError:
-        log.warning("Cannot write %s – file logging disabled", log_path)
 
 
 def _install_signal_handlers() -> None:
@@ -113,15 +109,28 @@ def main() -> int:
     )
 
     # --- supervised threads -------------------------------------------
-    t_ingest = SupervisedThread("ingest", ingest.serve_forever)
-    t_output = SupervisedThread("output", pipeline.output_loop)
-    t_sync   = SupervisedThread("endpoint-sync",
-                                lambda: _endpoint_sync_loop(db, forwarder))
+    nc_cfg = cfg.get("netcheck", {}) or {}
+    netcheck = NetCheck(
+        interval=float(nc_cfg.get("interval", 30)),
+        fail_threshold=int(nc_cfg.get("fail_threshold", 3)),
+        timeout=float(nc_cfg.get("timeout", 4)),
+        host=nc_cfg.get("host") or None,
+        port=int(nc_cfg.get("port", 53)),
+        interface=nc_cfg.get("interface", "wlan0"),
+        auto_recover=bool(nc_cfg.get("auto_recover", True)),
+    )
+
+    t_ingest   = SupervisedThread("ingest", ingest.serve_forever)
+    t_output   = SupervisedThread("output", pipeline.output_loop)
+    t_sync     = SupervisedThread("endpoint-sync",
+                                  lambda: _endpoint_sync_loop(db, forwarder))
+    t_netcheck = SupervisedThread("netcheck", netcheck.run)
     watchdog = Watchdog(interval=10.0)
 
     t_ingest.start()
     t_output.start()
     t_sync.start()
+    t_netcheck.start()
     watchdog.start()
 
     # --- web app (runs in main thread) --------------------------------
@@ -145,6 +154,7 @@ def main() -> int:
         _STOP.set()
         ingest.stop()
         forwarder.stop_all()
+        netcheck.stop()
         watchdog.stop()
         db.close()
     return 0

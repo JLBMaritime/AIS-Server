@@ -72,7 +72,8 @@ server):
 | Fan-out  | `forwarder.py`         | One thread + bounded queue per endpoint. TCP with auto-reconnect + exponential backoff. UDP and HTTP scaffolded. |
 | Web / API| `web/`                 | Flask + Flask-Login + Socket.IO. 8 pages, ships the dashboard, nodes, Wi-Fi, incoming/outgoing data viewers, endpoint CRUD, system page. |
 | CLI      | `cli.py`               | `aisctl` – same JSON API as the UI. |
-| Runtime  | `supervisor.py`        | Each background task runs in a `SupervisedThread` that restarts on any exception with exponential backoff. A `Watchdog` pings systemd every 10 s (WatchdogSec=30). |
+| Runtime  | `supervisor.py`        | Each background task runs in a `SupervisedThread` that restarts on any exception with exponential backoff. A `Watchdog` pings systemd every 10 s (WatchdogSec=60). |
+| Net-watch| `netcheck.py`          | Probes the default-route gateway every 30 s; bounces `wlan0` via `nmcli` after 3 consecutive failures (Pi 4B Wi-Fi-firmware freeze workaround). |
 
 ### End-to-end latency budget (node → endpoint)
 
@@ -292,15 +293,39 @@ Reload with `sudo systemctl restart ais-server`.
 
 ## Operations
 
-- **Logs**: `journalctl -u ais-server -f` *or* `/var/log/ais-server/ais-server.log` (rotated daily, 14 days retained).
+- **Logs**: `journalctl -u ais-server -f` (single source of truth — captured
+  by `systemd-journald` from stdout, rotated automatically).  The installer
+  enables a **persistent journal** in `/var/log/journal/` so logs survive
+  reboots; that's essential for diagnosing rare events.
 - **Service watchdog**: systemd will restart the process if it crashes or
-  stops pinging within 30 s.
-- **Resource limits**: `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`.
+  stops pinging within 60 s.
+- **Resource limits**: `MemoryHigh=512M`, `MemoryMax=1G`, `TasksMax=2048`,
+  `LimitNOFILE=65536`.
 - **Hardening**: `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome=yes`,
   `PrivateTmp=yes`.
 
 Typical resource usage with 5 nodes / 30 msgs/s: ~60 MB RAM, ~2 % CPU on a
 Pi 4.
+
+### Stability hardening (Pi 4B specific)
+
+After deploying to a Pi 4B we observed the box becoming completely
+unreachable (no SSH, no AIS, requires power cycle) every ~24 h.  Diagnosis:
+the Broadcom **`brcmfmac`** Wi-Fi firmware wedges under low-traffic
+conditions when power-save is enabled — a long-standing kernel/firmware
+issue, not a bug in `ais-server` itself.  The installer now ships three
+mitigations, all enabled by default:
+
+1. **`/etc/NetworkManager/conf.d/wifi-powersave-off.conf`** — sets
+   `wifi.powersave = 2` (disabled) for every NM-managed Wi-Fi connection.
+2. **`ais-wifi-powersave-off.service`** — a oneshot unit that also runs
+   `iw dev wlan0 set power_save off` on boot, in case NM is restarted.
+3. **`netcheck` thread** — every 30 s `ais-server` opens a tiny TCP probe
+   to the default-route gateway.  If three probes in a row fail it logs
+   `ERROR netcheck: bouncing wlan0` and runs
+   `nmcli device disconnect/connect wlan0` to kick the radio.  Tunable in
+   `config.yaml` under the `netcheck:` section, or set `auto_recover: false`
+   to log only.
 
 ---
 
@@ -339,6 +364,7 @@ sudo bash uninstall.sh --purge  # removes /etc, /var/lib, /var/log too
 | Forced password change won't submit | Must be ≥ 8 chars and both fields must match |
 | `aisctl` → "Not logged in"      | `aisctl login` first (creates `~/.aisctl/session`) |
 | `sudo tailscale up` hangs       | MagicDNS / auth-key issue – regenerate an auth-key with the right tag |
+| Pi unreachable after ~24 h, needs power-cycle | Almost certainly the brcmfmac Wi-Fi firmware freeze. Check `journalctl -u ais-server --grep netcheck` for recovery events; verify `iw dev wlan0 get power_save` returns `off`. Consider switching to wired Ethernet. |
 
 ---
 
@@ -358,6 +384,7 @@ AIS-Server/
 │   ├── supervisor.py        # restart-on-crash threads + sd_notify watchdog
 │   ├── db.py                # SQLite (users, endpoints, kv)
 │   ├── wifi.py              # nmcli helpers
+│   ├── netcheck.py          # gateway probe + auto-recovery thread
 │   ├── events.py            # tiny pub/sub bus
 │   ├── cli.py               # aisctl (Typer)
 │   └── web/                 # Flask + Socket.IO UI & JSON API
@@ -366,9 +393,10 @@ AIS-Server/
 │       └── static/          # css / js / svg
 ├── config/
 │   ├── ais-server.example.yaml
-│   └── logrotate.conf
+│   └── wifi-powersave-off.conf      # NM drop-in: disables Wi-Fi power-save
 ├── systemd/
-│   └── ais-server.service
+│   ├── ais-server.service
+│   └── ais-wifi-powersave-off.service  # belt-and-braces oneshot at boot
 ├── tools/
 │   ├── replay.py            # NMEA replay harness for load-testing
 │   └── ais-node.service     # drop-in unit for remote AIS nodes
@@ -400,7 +428,7 @@ AIS-Server/
    ingest or dedup; only its own queue back-pressures.
 7. **Exponential backoff with 30 s cap** – for failed TCP reconnects and for
    crashed worker threads.
-8. **SupervisedThread + systemd WatchdogSec=30** – double protection against
+8. **SupervisedThread + systemd WatchdogSec=60** – double protection against
    the "server must not crash" requirement.
 9. **Tag-block / multi-part aware** parser – many commercial AIS feeds
    include tag-blocks and 2-part !AIVDM; we handle both.
@@ -410,7 +438,13 @@ AIS-Server/
     shell out explicitly.
 12. **Minimal JS / no build step** – one 250-line `app.js` + one CSS file;
     pages render instantly on the Pi without Webpack, React, etc.
-13. **Rolling 10 MB log with 5 backups** + system-wide logrotate entry.
+13. **Single-source logging** – stdout → `systemd-journald` (persistent in
+    `/var/log/journal/`).  No competing rotators, no stale FDs.  Tail with
+    `journalctl -u ais-server -f`.
+14. **`netcheck` auto-recovery thread** – probes the default gateway every
+    30 s and bounces `wlan0` after 3 consecutive failures.  Together with
+    the `wifi.powersave=2` NM drop-in this fixes the brcmfmac "freeze after
+    24 h" bug seen on the Pi 4B.
 
 ## Suggested next-step optimisations
 

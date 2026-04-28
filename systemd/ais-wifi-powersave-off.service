@@ -1,0 +1,13 @@
+[Unit]
+Description=Disable Wi-Fi power-save on wlan0 (Pi 4B brcmfmac freeze workaround)
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Try iw first; fall back to iwconfig.  Either is fine.
+ExecStart=/bin/sh -c 'iw dev wlan0 set power_save off || iwconfig wlan0 power off || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

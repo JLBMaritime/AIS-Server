@@ -34,12 +34,26 @@ apt-get install -y --no-install-recommends \
     git curl ca-certificates rsync \
     python3 python3-venv python3-pip python3-dev \
     build-essential libffi-dev \
-    network-manager \
-    sqlite3 \
-    logrotate
+    network-manager iw wireless-tools \
+    sqlite3
 
 # ----------------------------------------------------------------------------
-# 2. Tailscale (optional)
+# 2. Persistent systemd journal
+# ----------------------------------------------------------------------------
+# Default RPi OS Lite keeps the journal in /run (volatile) – every boot the
+# previous logs are gone, which is why the original "24-hour freeze" was so
+# hard to diagnose.  Make it persistent.
+if [[ ! -d /var/log/journal ]]; then
+  log "Enabling persistent systemd journal in /var/log/journal…"
+  mkdir -p /var/log/journal
+  systemd-tmpfiles --create --prefix /var/log/journal
+  systemctl restart systemd-journald || warn "journald restart failed (non-fatal)"
+else
+  ok  "Persistent journal already configured"
+fi
+
+# ----------------------------------------------------------------------------
+# 3. Tailscale (optional)
 # ----------------------------------------------------------------------------
 if [[ "${INSTALL_TAILSCALE}" == "1" ]]; then
   if ! command -v tailscale >/dev/null 2>&1; then
@@ -52,7 +66,7 @@ if [[ "${INSTALL_TAILSCALE}" == "1" ]]; then
 fi
 
 # ----------------------------------------------------------------------------
-# 3. Fetch / update source
+# 4. Fetch / update source
 # ----------------------------------------------------------------------------
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
   log "Updating existing checkout in ${INSTALL_DIR}…"
@@ -71,7 +85,7 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# 4. Python venv + deps
+# 5. Python venv + deps
 # ----------------------------------------------------------------------------
 if [[ ! -d "${INSTALL_DIR}/.venv" ]]; then
   log "Creating Python venv…"
@@ -85,7 +99,7 @@ fi
 "${INSTALL_DIR}/.venv/bin/pip" install -e "${INSTALL_DIR}"
 
 # ----------------------------------------------------------------------------
-# 5. Directories + config
+# 6. Directories + config
 # ----------------------------------------------------------------------------
 install -d -m 0755 "${CONFIG_DIR}"
 install -d -m 0750 "${DATA_DIR}"
@@ -99,11 +113,35 @@ else
   ok  "Keeping existing ${CONFIG_DIR}/config.yaml"
 fi
 
-install -m 0644 "${INSTALL_DIR}/config/logrotate.conf" \
-        "/etc/logrotate.d/ais-server"
+# Logs are now journald-managed.  Remove any legacy logrotate.d entry from a
+# previous version of this installer – its presence triggered the
+# "three-rotators-one-file" stale-FD bug that caused 24h freezes.
+if [[ -f /etc/logrotate.d/ais-server ]]; then
+  log "Removing obsolete /etc/logrotate.d/ais-server (journald handles rotation now)"
+  rm -f /etc/logrotate.d/ais-server
+fi
 
 # ----------------------------------------------------------------------------
-# 6. CLI shim
+# 7. Wi-Fi power-save fix (Pi 4B brcmfmac freeze workaround)
+# ----------------------------------------------------------------------------
+log "Disabling Wi-Fi power-save (Pi 4B brcmfmac freeze workaround)…"
+install -d -m 0755 /etc/NetworkManager/conf.d
+install -m 0644 "${INSTALL_DIR}/config/wifi-powersave-off.conf" \
+        /etc/NetworkManager/conf.d/wifi-powersave-off.conf
+install -m 0644 "${INSTALL_DIR}/systemd/ais-wifi-powersave-off.service" \
+        /etc/systemd/system/ais-wifi-powersave-off.service
+systemctl daemon-reload
+systemctl enable --now ais-wifi-powersave-off.service || true
+# Reload NetworkManager so the drop-in takes effect immediately.
+systemctl reload-or-restart NetworkManager || warn "NetworkManager reload failed (non-fatal)"
+# And apply right now to the running radio, in case the reload above hasn't
+# rolled the existing connection.
+iw dev wlan0 set power_save off 2>/dev/null \
+  || iwconfig wlan0 power off 2>/dev/null \
+  || true
+
+# ----------------------------------------------------------------------------
+# 8. CLI shim
 # ----------------------------------------------------------------------------
 cat > /usr/local/bin/aisctl <<EOF
 #!/usr/bin/env bash
@@ -112,7 +150,7 @@ EOF
 chmod +x /usr/local/bin/aisctl
 
 # ----------------------------------------------------------------------------
-# 7. systemd service
+# 9. systemd service
 # ----------------------------------------------------------------------------
 install -m 0644 "${INSTALL_DIR}/systemd/${SERVICE_NAME}.service" \
         "/etc/systemd/system/${SERVICE_NAME}.service"
@@ -128,7 +166,7 @@ systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"
 
 # ----------------------------------------------------------------------------
-# 8. Done
+# 10. Done
 # ----------------------------------------------------------------------------
 IPADDR=$(hostname -I | awk '{print $1}')
 echo
