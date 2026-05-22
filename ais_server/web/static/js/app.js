@@ -219,21 +219,105 @@
   }
 
   // ------------------- LIVE STREAMS -------------------
+  /* Both data pages share this implementation; `kind` is "incoming" or
+   * "outgoing".  The dropdown is populated from /api/status (nodes for
+   * incoming, endpoints for outgoing) and the filter is applied at
+   * *append* time – so flipping the dropdown takes effect on the next
+   * sentence without re-subscribing or re-priming.
+   *
+   * Payload-vs-status matching:
+   *   incoming  →  payload.peer is "ip[:port]"   status.nodes[].peer    is "ip"
+   *   outgoing  →  payload.endpoint is the name  status.endpoints[].name is the name
+   * For incoming we therefore split on ":" and compare the host part so
+   * we don't have to care about the ephemeral source port.
+   */
   function startStream(kind) {
-    const pre = el('#stream-' + kind);
+    const pre        = el('#stream-' + kind);
+    const isIncoming = (kind === 'incoming');
+    const selectSel  = isIncoming ? '#filter-node' : '#filter-endpoint';
+    const select     = el(selectSel);
+    const allLabel   = isIncoming ? 'All nodes' : 'All endpoints';
     let paused = false;
+
     el('#toggle-pause').addEventListener('click', (ev) => {
       paused = !paused;
       ev.target.textContent = paused ? 'Resume' : 'Pause';
     });
 
-    // Prime with recent buffer.
-    api('/recent/' + kind).then(items => {
-      items.forEach(i => append(i));
-    });
+    // ----- dropdown population (initial + 5 s refresh) ------------------
+    let lastOptionsKey = '';
+    async function refreshFilterOptions() {
+      let entries = [];
+      try {
+        const s = await api('/status');
+        if (isIncoming) {
+          // De-dup by peer (IP); merge source_id label when known.
+          const byPeer = new Map();
+          (s.nodes || []).forEach(n => {
+            if (!n.peer) return;
+            const prev = byPeer.get(n.peer);
+            const label = n.source_id
+              ? `${n.source_id} (${n.peer})` : n.peer;
+            // Prefer the one with a connected session if there are dupes.
+            if (!prev || (n.connected && !prev.connected)) {
+              byPeer.set(n.peer, { value: n.peer, label, connected: !!n.connected });
+            }
+          });
+          entries = Array.from(byPeer.values())
+            .sort((a, b) => a.label.localeCompare(b.label));
+        } else {
+          entries = (s.endpoints || [])
+            .filter(e => e && e.name)
+            .map(e => ({ value: e.name,
+                         label: `${e.name} (${e.host}:${e.port})`,
+                         connected: !!e.connected }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+        }
+      } catch (e) { /* ignore – we'll retry on next tick */ }
 
+      // Only redraw when the set actually changed, so the dropdown
+      // doesn't flicker / collapse while the user is choosing.
+      const key = entries.map(e => e.value).join('|');
+      if (key === lastOptionsKey) return;
+      lastOptionsKey = key;
+
+      const keep = select.value;
+      select.innerHTML =
+        `<option value="">${allLabel}</option>` +
+        entries.map(e => `<option value="${e.value}">${e.label}</option>`)
+               .join('');
+      // Preserve the user's selection across refreshes when possible.
+      if (keep && entries.some(e => e.value === keep)) {
+        select.value = keep;
+      } else {
+        select.value = '';
+      }
+    }
+    refreshFilterOptions();
+    setInterval(refreshFilterOptions, 5000);
+
+    // ----- filter predicate (read at append time) -----------------------
+    function matchesFilter(p) {
+      const want = select.value;
+      if (!want) return true;
+      if (isIncoming) {
+        // payload.peer is "ip:port"; status.peer is just "ip"
+        const peer = (p.peer || '').split(':')[0];
+        return peer === want;
+      }
+      return (p.endpoint || '') === want;
+    }
+
+    // ----- prime + live stream ------------------------------------------
+    api('/recent/' + kind).then(items => {
+      items.forEach(i => { if (matchesFilter(i)) append(i); });
+    });
     const sock = io('/live');
-    sock.on(kind, (payload) => { if (!paused) append(payload); });
+    sock.on(kind, (payload) => {
+      if (paused) return;
+      if (!matchesFilter(payload)) return;
+      append(payload);
+    });
 
     function append(p) {
       const peer = p.peer || p.endpoint || '';
