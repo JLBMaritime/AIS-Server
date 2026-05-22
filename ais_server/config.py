@@ -11,6 +11,7 @@ import copy
 import logging
 import os
 import secrets
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -34,6 +35,31 @@ DEFAULTS: Dict[str, Any] = {
     "paths":    {"db":     "/var/lib/ais-server/ais.db",
                  "secret": "/var/lib/ais-server/secret_key",
                  "backup": "/var/lib/ais-server/backups"},
+    # --- self-healing / housekeeping ---
+    "netcheck": {"interval": 30, "fail_threshold": 3, "timeout": 4,
+                 "host": None, "port": 53, "interface": "wlan0",
+                 "auto_recover": True},
+    "diskcheck": {"interval": 60, "data_path": "/var",
+                  "low_water_mb": 500, "warn_water_mb": 1500},
+    "maintenance": {
+        # SQLite WAL checkpoint frequency (seconds).  Truncates the -wal
+        # file back to zero so it never grows unboundedly when there are
+        # long-lived readers.
+        "wal_checkpoint_interval": 3600,
+        # Full VACUUM frequency (seconds).  Cheap because the DB is tiny.
+        "vacuum_interval": 7 * 24 * 3600,
+        # Drop disconnected Nodes-page entries older than this (seconds).
+        # Set to 0 to keep them forever.
+        "node_max_age": 30 * 24 * 3600,
+        # How often to run the node-prune sweep.
+        "node_prune_interval": 3600,
+    },
+    "backups": {
+        # When the web/CLI "Download backup" path is asked to save to disk
+        # (paths.backup), keep at most this many files.  Set to 0 to keep
+        # everything.  In-memory downloads via the UI are unaffected.
+        "retention": 14,
+    },
 }
 
 
@@ -47,6 +73,36 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def _atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
+    """Write ``content`` to ``path`` atomically with a tmp + rename.
+
+    Avoids ever leaving a half-written secret key (or any other small
+    config file) on disk after a crash / power-loss.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp, mode)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except Exception:
+        # Clean up the tmp file on any failure so we don't leak it.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _ensure_secret_key(cfg: Dict[str, Any]) -> None:
     """If no secret_key is configured, generate one and persist it."""
     if cfg["web"].get("secret_key"):
@@ -56,13 +112,8 @@ def _ensure_secret_key(cfg: Dict[str, Any]) -> None:
         if secret_path.exists():
             cfg["web"]["secret_key"] = secret_path.read_text(encoding="utf-8").strip()
             return
-        secret_path.parent.mkdir(parents=True, exist_ok=True)
         key = secrets.token_urlsafe(48)
-        secret_path.write_text(key, encoding="utf-8")
-        try:
-            os.chmod(secret_path, 0o600)
-        except OSError:
-            pass
+        _atomic_write_text(secret_path, key, mode=0o600)
         cfg["web"]["secret_key"] = key
     except PermissionError:
         # Developer mode (no /var/lib access) – fall back to ephemeral key.
@@ -95,6 +146,10 @@ def load_config(path: str | None = None) -> Dict[str, Any]:
         pass
     try:
         Path(cfg["paths"]["db"]).parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        pass
+    try:
+        Path(cfg["paths"]["backup"]).mkdir(parents=True, exist_ok=True)
     except PermissionError:
         pass
 

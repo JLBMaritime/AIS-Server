@@ -8,7 +8,10 @@ Wires everything together and runs forever:
 4. Build Pipeline (dedup / reorder / node-registry).
 5. Start TCP ingest listener + output loop + endpoint-sync loop, each under
    SupervisedThread so they restart automatically on any exception.
-6. Start the Flask + Socket.IO web app (blocking, runs in main thread in
+6. Start the auxiliary housekeeping threads: ``netcheck`` (Wi-Fi self-heal),
+   ``diskcheck`` (low-disk warning), and ``maintenance`` (DB WAL checkpoint /
+   VACUUM / inactive-node prune).
+7. Start the Flask + Socket.IO web app (blocking, runs in main thread in
    ``threading`` async mode).  The Watchdog thread pings systemd every 10 s.
 """
 from __future__ import annotations
@@ -22,6 +25,7 @@ import time
 
 from .config import load_config
 from .db import Database
+from .diskcheck import DiskCheck
 from .events import EventBus
 from .forwarder import ForwarderManager
 from .ingest import TcpIngest
@@ -78,6 +82,59 @@ def _endpoint_sync_loop(db: Database, forwarder: ForwarderManager) -> None:
         time.sleep(2.0)
 
 
+def _maintenance_loop(cfg: dict, db: Database, pipeline: Pipeline) -> None:
+    """Background hygiene: WAL checkpoint, VACUUM, inactive-node prune.
+
+    All actions are best-effort and any failure is logged and swallowed so
+    a transient SQLite hiccup never crashes the supervisor (which would
+    restart this loop anyway, but spammy crash logs help no-one).
+    """
+    m = cfg.get("maintenance", {}) or {}
+    ckpt_iv  = float(m.get("wal_checkpoint_interval", 3600))
+    vac_iv   = float(m.get("vacuum_interval", 7 * 24 * 3600))
+    prune_iv = float(m.get("node_prune_interval", 3600))
+    node_max = float(m.get("node_max_age", 30 * 24 * 3600))
+
+    # Sleep "interval" between ticks, but never less than 30 s, and use the
+    # shortest of the three so each task can fire on its own schedule.
+    tick = max(30.0, min(t for t in (ckpt_iv, vac_iv, prune_iv) if t > 0)
+               if any(t > 0 for t in (ckpt_iv, vac_iv, prune_iv)) else 3600)
+
+    last_ckpt = 0.0
+    last_vac  = 0.0
+    last_prune = 0.0
+    log.info("maintenance: starting (ckpt=%.0fs vacuum=%.0fs prune=%.0fs)",
+             ckpt_iv, vac_iv, prune_iv)
+    while not _STOP.is_set():
+        now = time.time()
+        if ckpt_iv > 0 and (now - last_ckpt) >= ckpt_iv:
+            try:
+                stats = db.checkpoint("TRUNCATE")
+                log.info("maintenance: WAL checkpoint(TRUNCATE) busy=%d log=%d "
+                         "ckpt=%d", stats["busy"], stats["log"],
+                         stats["checkpointed"])
+            except Exception:  # noqa: BLE001
+                log.exception("maintenance: WAL checkpoint failed")
+            last_ckpt = now
+        if vac_iv > 0 and (now - last_vac) >= vac_iv:
+            try:
+                db.vacuum()
+                log.info("maintenance: VACUUM complete (db=%d bytes)",
+                         db.size_info().get("db", 0))
+            except Exception:  # noqa: BLE001
+                log.exception("maintenance: VACUUM failed")
+            last_vac = now
+        if prune_iv > 0 and (now - last_prune) >= prune_iv and node_max > 0:
+            try:
+                pipeline.nodes.prune_inactive(node_max)
+            except Exception:  # noqa: BLE001
+                log.exception("maintenance: prune_inactive failed")
+            last_prune = now
+        # Use the stop-event so SIGTERM unblocks us promptly.
+        if _STOP.wait(tick):
+            return
+
+
 def main() -> int:
     cfg = load_config()
     _setup_logging(cfg)
@@ -120,22 +177,37 @@ def main() -> int:
         auto_recover=bool(nc_cfg.get("auto_recover", True)),
     )
 
+    dc_cfg = cfg.get("diskcheck", {}) or {}
+    diskcheck = DiskCheck(
+        data_path=str(dc_cfg.get("data_path") or "/var"),
+        db_path=cfg["paths"]["db"],
+        interval=float(dc_cfg.get("interval", 60)),
+        low_water_mb=int(dc_cfg.get("low_water_mb", 500)),
+        warn_water_mb=int(dc_cfg.get("warn_water_mb", 1500)),
+    )
+
     t_ingest   = SupervisedThread("ingest", ingest.serve_forever)
     t_output   = SupervisedThread("output", pipeline.output_loop)
     t_sync     = SupervisedThread("endpoint-sync",
                                   lambda: _endpoint_sync_loop(db, forwarder))
     t_netcheck = SupervisedThread("netcheck", netcheck.run)
+    t_disk     = SupervisedThread("diskcheck", diskcheck.run)
+    t_maint    = SupervisedThread("maintenance",
+                                  lambda: _maintenance_loop(cfg, db, pipeline))
     watchdog = Watchdog(interval=10.0)
 
     t_ingest.start()
     t_output.start()
     t_sync.start()
     t_netcheck.start()
+    t_disk.start()
+    t_maint.start()
     watchdog.start()
 
     # --- web app (runs in main thread) --------------------------------
     from .web.app import create_app  # local import to avoid circulars
-    flask_app, socketio = create_app(cfg, db, pipeline, forwarder, events)
+    flask_app, socketio = create_app(cfg, db, pipeline, forwarder, events,
+                                     diskcheck=diskcheck)
 
     host = cfg["web"]["host"]
     port = int(cfg["web"]["port"])
@@ -155,6 +227,7 @@ def main() -> int:
         ingest.stop()
         forwarder.stop_all()
         netcheck.stop()
+        diskcheck.stop()
         watchdog.stop()
         db.close()
     return 0

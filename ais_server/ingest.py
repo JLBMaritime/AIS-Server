@@ -64,11 +64,43 @@ class NodeInfo:
         return self.active_sessions > 0
 
 
+# How often we're willing to emit a per-node "session opened/closed" INFO
+# line.  A flaky node that reconnects every few seconds would otherwise
+# flood the journal; over this window we log at INFO once, then DEBUG.
+_SESSION_LOG_MIN_INTERVAL = 60.0
+
+
 class NodeRegistry:
     """Thread-safe registry of nodes keyed by source-id or host IP."""
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._nodes: Dict[str, NodeInfo] = {}
+        # key -> (last_open_log_ts, last_close_log_ts) for log rate-limiting.
+        self._last_log: Dict[str, Tuple[float, float]] = {}
+
+    # ------------------------------------------------------------------
+    def should_log_session(self, key: str, event: str) -> bool:
+        """Return True if we should emit a chatty INFO line for this event.
+
+        Always logs the *first* event of each kind for a node, then at most
+        once per ``_SESSION_LOG_MIN_INTERVAL`` seconds.  Saves the journal
+        when a Pi-side node reconnects every few seconds (brcmfmac freeze
+        symptom).
+        """
+        now = time.time()
+        with self._lock:
+            open_ts, close_ts = self._last_log.get(key, (0.0, 0.0))
+            if event == "open":
+                if now - open_ts >= _SESSION_LOG_MIN_INTERVAL:
+                    self._last_log[key] = (now, close_ts)
+                    return True
+                return False
+            if event == "close":
+                if now - close_ts >= _SESSION_LOG_MIN_INTERVAL:
+                    self._last_log[key] = (open_ts, now)
+                    return True
+                return False
+        return True
 
     # ------------------------------------------------------------------
     def on_session_start(self, peer: str, host: str,
@@ -151,6 +183,34 @@ class NodeRegistry:
                 })
         return sorted(out, key=lambda x: (not x["connected"], -x["last_seen"]))
 
+    # ------------------------------------------------------------------
+    def prune_inactive(self, max_age_seconds: float) -> int:
+        """Drop logical-node entries that have been disconnected for too long.
+
+        Useful in volatile fleets where nodes come and go and the Nodes page
+        would otherwise grow unboundedly.  Currently-connected nodes are
+        always kept regardless of ``last_seen``.  Returns the number of
+        entries removed.
+        """
+        if max_age_seconds <= 0:
+            return 0
+        now = time.time()
+        removed = 0
+        with self._lock:
+            for key in list(self._nodes.keys()):
+                n = self._nodes[key]
+                if n.active_sessions > 0:
+                    continue
+                if (now - n.last_seen) > max_age_seconds:
+                    del self._nodes[key]
+                    self._last_log.pop(key, None)
+                    removed += 1
+        if removed:
+            log.info("Pruned %d inactive node entr%s (idle > %.0fh)",
+                     removed, "y" if removed == 1 else "ies",
+                     max_age_seconds / 3600.0)
+        return removed
+
 
 # ---------------------------------------------------------------------------
 # Tag-block helper
@@ -199,8 +259,12 @@ class _ConnectionHandler(threading.Thread):
         # arrive on this session.
         key = self.host
         info = self.registry.on_session_start(self.peer, self.host)
-        log.info("Node session opened: peer=%s key=%s (sessions=%d)",
-                 self.peer, info.key, info.sessions)
+        if self.registry.should_log_session(info.key, "open"):
+            log.info("Node session opened: peer=%s key=%s (sessions=%d)",
+                     self.peer, info.key, info.sessions)
+        else:
+            log.debug("Node session opened: peer=%s key=%s (sessions=%d)",
+                      self.peer, info.key, info.sessions)
         buf = b""
         try:
             self.sock.settimeout(self.idle_timeout)
@@ -232,7 +296,10 @@ class _ConnectionHandler(threading.Thread):
             except OSError:
                 pass
             self.registry.on_session_end(key)
-            log.info("Node session closed: peer=%s key=%s", self.peer, key)
+            if self.registry.should_log_session(key, "close"):
+                log.info("Node session closed: peer=%s key=%s", self.peer, key)
+            else:
+                log.debug("Node session closed: peer=%s key=%s", self.peer, key)
 
     # ------------------------------------------------------------------
     def _handle_line(self, raw: bytes, info: NodeInfo, key: str) -> str:

@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 
 def create_app(cfg: Dict[str, Any], db: Database, pipeline: Pipeline,
-               forwarder: ForwarderManager, events: EventBus
+               forwarder: ForwarderManager, events: EventBus,
+               diskcheck=None,
                ) -> tuple[Flask, SocketIO]:
     app = Flask(
         __name__,
@@ -40,6 +41,7 @@ def create_app(cfg: Dict[str, Any], db: Database, pipeline: Pipeline,
         # Share live objects via app.config so blueprints can use current_app.
         CFG=cfg, DB=db, PIPELINE=pipeline,
         FORWARDER=forwarder, EVENTS=events,
+        DISKCHECK=diskcheck,
         APP_NAME="JLBMaritime AIS-Server",
         PRIMARY_COLOR="#1c2346",
         SECONDARY_COLOR="#137dc5",

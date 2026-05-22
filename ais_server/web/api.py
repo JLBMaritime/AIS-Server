@@ -166,19 +166,114 @@ def change_password():
     return jsonify({"ok": True})
 
 
-@bp.get("/system/backup")
-@login_required
-def backup():
-    cfg = current_app.config["CFG"]
+def _make_backup_bytes(cfg) -> bytes:
+    """Build a tar.gz of the DB + main config in memory."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for p in (cfg["paths"]["db"], "/etc/ais-server/config.yaml"):
             if Path(p).exists():
                 tar.add(p, arcname=Path(p).name)
     buf.seek(0)
-    fname = f"ais-server-backup-{int(time.time())}.tar.gz"
-    return send_file(buf, mimetype="application/gzip",
+    return buf.getvalue()
+
+
+def _prune_backups(directory: Path, keep: int) -> int:
+    """Keep only the ``keep`` newest ``ais-server-backup-*.tar.gz`` files.
+
+    Returns the number of files removed.  ``keep <= 0`` disables pruning.
+    """
+    if keep <= 0 or not directory.is_dir():
+        return 0
+    files = sorted(
+        (p for p in directory.glob("ais-server-backup-*.tar.gz") if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    removed = 0
+    for old in files[keep:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+@bp.get("/system/backup")
+@login_required
+def backup():
+    """Stream a fresh backup to the caller as a download.
+
+    If the ``save=1`` query-string flag is set, *also* write a copy to
+    ``paths.backup`` and prune to ``backups.retention`` files (default 14).
+    The on-disk copy is what survives an SD-card swap; the browser
+    download is what the user actually clicks the "Backup" button for.
+    """
+    cfg = current_app.config["CFG"]
+    data = _make_backup_bytes(cfg)
+    ts = int(time.time())
+    fname = f"ais-server-backup-{ts}.tar.gz"
+
+    if request.args.get("save") in ("1", "true", "yes"):
+        try:
+            backup_dir = Path(cfg["paths"].get("backup")
+                              or "/var/lib/ais-server/backups")
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            (backup_dir / fname).write_bytes(data)
+            keep = int((cfg.get("backups") or {}).get("retention", 14))
+            _prune_backups(backup_dir, keep)
+        except OSError as exc:
+            current_app.logger.warning("backup: on-disk save failed: %s", exc)
+
+    return send_file(io.BytesIO(data), mimetype="application/gzip",
                      as_attachment=True, download_name=fname)
+
+
+@bp.get("/system/backups")
+@login_required
+def backups_list():
+    """List on-disk backup files (newest first)."""
+    cfg = current_app.config["CFG"]
+    directory = Path(cfg["paths"].get("backup")
+                     or "/var/lib/ais-server/backups")
+    out = []
+    if directory.is_dir():
+        for p in directory.glob("ais-server-backup-*.tar.gz"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            out.append({"name": p.name, "size": st.st_size,
+                        "mtime": int(st.st_mtime)})
+    out.sort(key=lambda r: r["mtime"], reverse=True)
+    return jsonify(out)
+
+
+@bp.get("/system/info")
+@login_required
+def system_info():
+    """Snapshot of host & service vitals for the System / Dashboard pages.
+
+    Always cheap: served from the DiskCheck's cached snapshot if available,
+    otherwise computed on-demand.  Includes disk-free, journal usage, DB +
+    WAL sizes, RAM, CPU %, load average and our own RSS / thread / FD count.
+    """
+    dc = current_app.config.get("DISKCHECK")
+    if dc is not None:
+        info = dc.last() or dc.snapshot()
+    else:
+        info = {}
+    # Layer in service-specific counts even if DiskCheck isn't running.
+    pipeline = current_app.config["PIPELINE"]
+    forwarder = current_app.config["FORWARDER"]
+    info["service"] = {
+        "uptime_seconds": pipeline.stats().get("uptime_seconds", 0),
+        "nodes_connected": sum(1 for n in pipeline.nodes.snapshot()
+                               if n.get("connected")),
+        "nodes_total": len(pipeline.nodes.snapshot()),
+        "endpoints_total": len(forwarder.stats()),
+    }
+    return jsonify(info)
 
 
 @bp.post("/system/restart")

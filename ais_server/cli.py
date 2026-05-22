@@ -242,15 +242,76 @@ def reboot():
 
 
 @app.command()
-def backup(output: Path = typer.Argument("ais-backup.tar.gz")):
+def backup(
+    output: Path = typer.Argument("ais-backup.tar.gz"),
+    save_on_pi: bool = typer.Option(
+        False, "--save-on-pi",
+        help="Also keep a copy in paths.backup on the server "
+             "(pruned to backups.retention)."),
+):
     """Download a backup archive."""
     s = _session()
-    r = s.get(_base_url() + "/api/system/backup", timeout=30, stream=True)
+    url = _base_url() + "/api/system/backup" + ("?save=1" if save_on_pi else "")
+    r = s.get(url, timeout=30, stream=True)
     r.raise_for_status()
     with output.open("wb") as fh:
         for chunk in r.iter_content(chunk_size=8192):
             fh.write(chunk)
     console.print(f"[green]Saved to {output}[/green]")
+    if save_on_pi:
+        console.print("[green]Server-side copy also saved.[/green]")
+
+
+def _fmt_bytes(n: int | None) -> str:
+    if n is None:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.2f}{unit}" if isinstance(n, float) else f"{n}{unit}"
+        n = n / 1024
+    return f"{n:.2f}TB"
+
+
+@app.command()
+def sysinfo():
+    """Show host vitals (disk, RAM, journal, DB, load) – matches the
+    System-page card.  Useful in SSH sessions where opening the web UI is
+    inconvenient."""
+    info = _get("/api/system/info")
+    svc = info.get("service") or {}
+    disk = info.get("disk") or {}
+    jrn = info.get("journal") or {}
+    dbi = info.get("db") or {}
+    mem = info.get("memory") or {}
+    proc = info.get("process") or {}
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style="bold")
+    t.add_column()
+    t.add_row("State",   str(info.get("state", "—")))
+    t.add_row("Uptime",  f"{svc.get('uptime_seconds', 0)}s")
+    if disk:
+        t.add_row("Disk",    f"{_fmt_bytes(disk.get('free'))} free / "
+                             f"{_fmt_bytes(disk.get('total'))}  "
+                             f"({disk.get('percent', '?')}% used, "
+                             f"{disk.get('path', '?')})")
+    t.add_row("Journal", f"{_fmt_bytes(jrn.get('bytes'))} ({jrn.get('path', '?')})")
+    t.add_row("DB",      f"{_fmt_bytes(dbi.get('db_bytes'))} DB + "
+                         f"{_fmt_bytes(dbi.get('wal_bytes'))} WAL")
+    if mem:
+        t.add_row("Memory",  f"{_fmt_bytes(mem.get('used'))} / "
+                             f"{_fmt_bytes(mem.get('total'))}  "
+                             f"({mem.get('percent', '?')}%)")
+    la = info.get("loadavg") or []
+    t.add_row("CPU",     f"{info.get('cpu_percent', '?')}%  load "
+                         + (" / ".join(str(x) for x in la) if la else "—"))
+    if proc:
+        t.add_row("Process", f"RSS {_fmt_bytes(proc.get('rss'))}, "
+                             f"{proc.get('threads', '?')} threads, "
+                             f"{proc.get('fds', '?')} fds")
+    t.add_row("Nodes",   f"{svc.get('nodes_connected', 0)} / "
+                         f"{svc.get('nodes_total', 0)} connected, "
+                         f"{svc.get('endpoints_total', 0)} endpoints")
+    console.print(t)
 
 
 if __name__ == "__main__":

@@ -28,9 +28,11 @@
     return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + (m ? m + 'm ' : '') + s + 's';
   };
   const fmtBytes = n => {
+    if (n == null) return '—';
     if (n < 1024) return n + 'B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'KB';
-    return (n / 1024 / 1024).toFixed(2) + 'MB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + 'MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + 'GB';
   };
   const fmtRel = ts => {
     if (!ts) return '—';
@@ -41,6 +43,74 @@
   };
   const el = sel => document.querySelector(sel);
   const setText = (sel, v) => { const e = el(sel); if (e) e.textContent = v; };
+
+  // ------------------- SYSTEM-INFO HELPERS -------------------
+  // Banner colours come from the diskcheck "state" field: ok | warn | low.
+  // We re-use these on both the Dashboard (top-of-page) and System pages.
+  function renderDiskBanner(targetSel, info) {
+    const t = el(targetSel);
+    if (!t) return;
+    const state = (info && info.state) || 'ok';
+    const disk = (info && info.disk) || {};
+    if (state === 'ok' || disk.free == null) { t.innerHTML = ''; return; }
+    const cls = state === 'low' ? 'banner err' : 'banner warn';
+    const msg = state === 'low'
+      ? `LOW DISK SPACE: only ${fmtBytes(disk.free)} free on ${disk.path}.`
+      : `Disk space getting tight – ${fmtBytes(disk.free)} free on ${disk.path}.`;
+    t.innerHTML = `<div class="card ${cls}">${msg}</div>`;
+  }
+
+  async function refreshDashboardBanner() {
+    if (!el('#disk-banner')) return;
+    try {
+      const info = await api('/system/info');
+      renderDiskBanner('#disk-banner', info);
+    } catch (e) { /* ignore – banner is best-effort */ }
+  }
+
+  async function refreshSystemInfo() {
+    let info;
+    try { info = await api('/system/info'); }
+    catch (e) { console.warn(e); return; }
+    renderDiskBanner('#sys-banner', info);
+    const svc = info.service || {};
+    const disk = info.disk || {};
+    const jrn = info.journal || {};
+    const dbi = info.db || {};
+    const mem = info.memory || {};
+    const proc = info.process || {};
+    setText('#sys-uptime', fmtUptime(svc.uptime_seconds));
+    setText('#sys-disk', disk.free == null ? '—'
+      : `${fmtBytes(disk.free)} free / ${fmtBytes(disk.total)} `
+        + `(${disk.percent}% used, ${disk.path})`);
+    setText('#sys-journal', jrn.bytes == null ? '—'
+      : `${fmtBytes(jrn.bytes)} (${jrn.path})`);
+    setText('#sys-db', dbi.db_bytes == null ? '—'
+      : `${fmtBytes(dbi.db_bytes)} DB + ${fmtBytes(dbi.wal_bytes)} WAL`
+        + (dbi.path ? ` (${dbi.path})` : ''));
+    setText('#sys-mem', mem.percent == null ? '—'
+      : `${fmtBytes(mem.used)} / ${fmtBytes(mem.total)} (${mem.percent}% used)`);
+    const la = info.loadavg ? info.loadavg.join(' / ') : '—';
+    setText('#sys-cpu', `${info.cpu_percent == null ? '—' : info.cpu_percent + '%'} `
+                       + `(load ${la})`);
+    setText('#sys-proc', proc.rss == null ? '—'
+      : `RSS ${fmtBytes(proc.rss)}, ${proc.threads} threads`
+        + (proc.fds != null ? `, ${proc.fds} fds` : ''));
+    setText('#sys-conn', `${svc.nodes_connected}/${svc.nodes_total} nodes, `
+                        + `${svc.endpoints_total} endpoints`);
+  }
+
+  async function refreshBackupsList() {
+    const body = el('#backups-tbl tbody');
+    if (!body) return;
+    try {
+      const list = await api('/system/backups');
+      body.innerHTML = list.map(b =>
+        `<tr><td>${b.name}</td><td>${fmtBytes(b.size)}</td>
+          <td>${new Date(b.mtime * 1000).toLocaleString()}</td></tr>`).join('')
+        || '<tr><td colspan="3" class="muted">No on-disk backups yet.</td></tr>';
+    } catch (e) { /* ignore */ }
+  }
 
   // ------------------- DASHBOARD -------------------
   async function refreshStatus() {
@@ -178,7 +248,13 @@
 
   // ------------------- API wrappers -------------------
   const ais = {
-    dashboard() { refreshStatus(); setInterval(refreshStatus, 2000); },
+    dashboard() {
+      refreshStatus();
+      refreshDashboardBanner();
+      setInterval(refreshStatus, 2000);
+      // Disk-state changes slowly – polling every 30 s is plenty.
+      setInterval(refreshDashboardBanner, 30000);
+    },
     nodes()     { refreshNodes();   setInterval(refreshNodes,   2000); },
     wifi() {
       refreshWifiCurrent(); refreshWifiScan(); refreshWifiSaved();
@@ -276,6 +352,28 @@
         alert(r.ok ? 'Password updated.' : 'Failed: ' + (r.error || 'unknown'));
         if (r.ok) ev.target.reset();
       });
+
+      // Host vitals + on-disk backups (refresh every 5 s; 30 s for backups).
+      refreshSystemInfo();
+      refreshBackupsList();
+      setInterval(refreshSystemInfo, 5000);
+      setInterval(refreshBackupsList, 30000);
+
+      // "save copy on Pi" checkbox – rewrites the backup link's URL.
+      const dl = el('#dl-backup');
+      const cb = el('#save-backup');
+      if (dl && cb) {
+        const base = dl.getAttribute('href');
+        const update = () => {
+          dl.setAttribute('href', base + (cb.checked ? '?save=1' : ''));
+        };
+        cb.addEventListener('change', update);
+        // Re-list backups shortly after a download, in case ?save=1 was set.
+        dl.addEventListener('click', () => {
+          setTimeout(refreshBackupsList, 1500);
+        });
+        update();
+      }
     },
     async restart() {
       if (!confirm('Restart the AIS-Server service?')) return;

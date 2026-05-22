@@ -77,6 +77,39 @@ netcheck:
   auto_recover: true
 
 
+# Low-disk watchdog and host-info source for the System / Dashboard pages.
+# `interval` controls how often we sample free space.  We log a WARNING the
+# first time we cross `warn_water_mb`, and an ERROR (with a red banner in the
+# UI) the first time we cross `low_water_mb`.  Transitions both ways are
+# logged exactly once – no spam.
+diskcheck:
+  interval: 60
+  data_path: "/var"
+  warn_water_mb: 1500
+  low_water_mb: 500
+
+# Housekeeping schedule for the SQLite database and the in-memory node
+# registry.  All actions run on a single background thread and never touch
+# the hot NMEA path.  Set any interval to 0 to disable that task.
+maintenance:
+  # WAL checkpoint(TRUNCATE) – stops the -wal file growing unboundedly when
+  # there are long-lived readers.  Hourly is plenty.
+  wal_checkpoint_interval: 3600
+  # Full VACUUM – the DB is tiny so this is essentially free.  Weekly.
+  vacuum_interval: 604800
+  # Drop Nodes-page entries that have been disconnected for longer than this
+  # (seconds).  Set to 0 to remember every node that ever connected.
+  node_max_age: 2592000        # 30 days
+  node_prune_interval: 3600
+
+# Backup retention for **on-disk** backups (browser downloads are always
+# kept by the user).  When the System page is asked to "save copy on Pi",
+# the newest `retention` files in paths.backup are kept; older ones are
+# pruned automatically.  Set to 0 to keep every backup forever.
+backups:
+  retention: 14
+
+
 # Paths – normally you don't need to change these.
 paths:
   db:      "/var/lib/ais-server/ais.db"

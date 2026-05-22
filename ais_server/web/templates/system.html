@@ -4,6 +4,24 @@
 <h2>System</h2>
 
 <div class="card">
+  <h3>Host &amp; service vitals</h3>
+  <div id="sys-banner"></div>
+  <table class="data" id="sys-tbl">
+    <tbody>
+      <tr><th>Uptime</th><td id="sys-uptime">—</td></tr>
+      <tr><th>Disk free ({{ '<path>' }})</th><td id="sys-disk">—</td></tr>
+      <tr><th>Journal usage</th><td id="sys-journal">—</td></tr>
+      <tr><th>Database</th><td id="sys-db">—</td></tr>
+      <tr><th>Memory</th><td id="sys-mem">—</td></tr>
+      <tr><th>CPU / load</th><td id="sys-cpu">—</td></tr>
+      <tr><th>Process</th><td id="sys-proc">—</td></tr>
+      <tr><th>Connections</th><td id="sys-conn">—</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">Auto-refreshes every 5 seconds.</p>
+</div>
+
+<div class="card">
   <h3>Change password</h3>
   <form id="pw-form" class="row">
     <input type="password" name="current_password" placeholder="Current password" required>
@@ -15,8 +33,19 @@
 <div class="card">
   <h3>Backup / restore</h3>
   <p class="muted">Downloads a gzipped tarball of the config and the SQLite
-    database.</p>
-  <a class="button" href="{{ url_for('api.backup') }}">Download backup</a>
+    database.  Tick the box to also keep a copy on the Pi (pruned to the
+    last <code>backups.retention</code> files in <code>paths.backup</code>).</p>
+  <div class="row">
+    <a class="button" id="dl-backup" href="{{ url_for('api.backup') }}">Download backup</a>
+    <label class="muted small">
+      <input type="checkbox" id="save-backup"> save copy on Pi
+    </label>
+  </div>
+  <h4 class="muted small" style="margin-top:1em">On-disk copies</h4>
+  <table class="data" id="backups-tbl">
+    <thead><tr><th>Name</th><th>Size</th><th>Date</th></tr></thead>
+    <tbody></tbody>
+  </table>
 </div>
 
 <div class="card">

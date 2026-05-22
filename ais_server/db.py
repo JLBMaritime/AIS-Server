@@ -101,6 +101,10 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
+        # Make the WAL self-bounding.  SQLite's default 1000-page (~4 MB)
+        # auto-checkpoint is fine, but state it explicitly so a future
+        # libsqlite3 with different defaults can't surprise us.
+        self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
         self._conn.executescript(SCHEMA)
 
     # ------------------------------------------------------------------
@@ -255,8 +259,59 @@ class Database:
                 (key, value),
             )
 
+    # ------------------------------------------------------------------
+    # Maintenance
+    # ------------------------------------------------------------------
+    def checkpoint(self, mode: str = "TRUNCATE") -> Dict[str, int]:
+        """Force a WAL checkpoint.
+
+        ``TRUNCATE`` is the strongest mode – it merges *and* shrinks the
+        ``-wal`` file back to zero bytes, which is what we want for a tidy
+        long-running install.  Returns a dict with the (busy, log, ckpt)
+        counters from ``PRAGMA wal_checkpoint``.
+        """
+        mode = (mode or "TRUNCATE").upper()
+        if mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+            mode = "TRUNCATE"
+        with self._lock:
+            row = self._conn.execute(
+                f"PRAGMA wal_checkpoint({mode});").fetchone()
+        # row is (busy, log_pages, checkpointed_pages) on success.
+        if row is None:
+            return {"busy": -1, "log": 0, "checkpointed": 0}
+        return {"busy": int(row[0]), "log": int(row[1]),
+                "checkpointed": int(row[2])}
+
+    def vacuum(self) -> None:
+        """Reclaim free pages from the main DB file.
+
+        Cheap on this DB (a few KB to a few hundred KB) and only run on a
+        schedule from the maintenance thread, never on the hot path.
+        """
+        with self._lock:
+            # VACUUM has to run outside an active transaction; we're already
+            # in autocommit (isolation_level=None) so this is fine.
+            self._conn.execute("VACUUM;")
+
+    def size_info(self) -> Dict[str, int]:
+        """Return on-disk sizes of the main, WAL and SHM files (bytes)."""
+        out: Dict[str, int] = {}
+        for key, suffix in (("db", ""), ("wal", "-wal"), ("shm", "-shm")):
+            p = Path(self.path + suffix)
+            try:
+                out[key] = p.stat().st_size if p.exists() else 0
+            except OSError:
+                out[key] = 0
+        return out
+
+    # ------------------------------------------------------------------
     def close(self) -> None:
         with self._lock:
+            # Best-effort final checkpoint so the next boot starts clean.
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            except sqlite3.Error:
+                pass
             self._conn.close()
 
     # ------------------------------------------------------------------

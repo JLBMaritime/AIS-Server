@@ -410,6 +410,39 @@ AIS-Server/
 
 ---
 
+## Long-running hygiene (24/7 on an SD card)
+
+The service is designed to survive months of uninterrupted operation on a
+Raspberry Pi with no human intervention.  The pieces that keep that promise:
+
+* **Bounded journal** – `install.sh` drops
+  `/etc/systemd/journald.conf.d/ais-server.conf` so the on-disk journal is
+  capped at 500 MB / 14 days.  Without this, a chatty fleet can fill the
+  SD card.
+* **SQLite WAL is self-bounding** – `PRAGMA wal_autocheckpoint=1000` plus
+  an hourly `PRAGMA wal_checkpoint(TRUNCATE)` from the `maintenance` thread
+  keep `ais.db-wal` near-zero.  A weekly `VACUUM` reclaims any free pages.
+  All of this is configurable in `maintenance:` in the config.
+* **Node-log rate-limit** – a flaky AIS node that reconnects every few
+  seconds (Pi 4B brcmfmac freeze pattern) can no longer flood the journal
+  with `session opened/closed` lines; we emit at most one INFO line per
+  minute per node, the rest go to DEBUG.
+* **Inactive-node prune** – Nodes-page rows older than `node_max_age`
+  (default 30 days, disconnected) are dropped from memory each hour.
+* **Disk-space watchdog** – the `diskcheck` thread polls free space every
+  60 s and logs at WARNING below 1.5 GB / ERROR below 500 MB.  Both
+  thresholds are configurable, and the same data feeds the System-page
+  vitals card and the red/amber banner on the Dashboard.
+* **Backup retention** – clicking *Download backup* with "save copy on
+  Pi" ticked (or `aisctl backup --save-on-pi`) writes a copy to
+  `paths.backup` and prunes to `backups.retention` (default 14).
+* **Atomic secret-key write** – the auto-generated Flask `secret_key` is
+  written via tmp + `os.replace()` so a power-loss can never leave a
+  half-written file.
+
+`aisctl sysinfo` from any SSH session prints the same vitals card
+without opening the web UI.
+
 ## Optimisations already baked in
 
 *(suggestions from the brief — all implemented)*

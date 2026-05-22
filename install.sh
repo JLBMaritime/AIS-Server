@@ -38,18 +38,44 @@ apt-get install -y --no-install-recommends \
     sqlite3
 
 # ----------------------------------------------------------------------------
-# 2. Persistent systemd journal
+# 2. Persistent + bounded systemd journal
 # ----------------------------------------------------------------------------
 # Default RPi OS Lite keeps the journal in /run (volatile) – every boot the
 # previous logs are gone, which is why the original "24-hour freeze" was so
-# hard to diagnose.  Make it persistent.
+# hard to diagnose.  Make it persistent **and** cap its on-disk size, so a
+# long-running install with chatty nodes can't quietly fill the SD card.
+JOURNAL_DROPIN_DIR=/etc/systemd/journald.conf.d
+JOURNAL_DROPIN=${JOURNAL_DROPIN_DIR}/ais-server.conf
+JOURNAL_CHANGED=0
 if [[ ! -d /var/log/journal ]]; then
   log "Enabling persistent systemd journal in /var/log/journal…"
   mkdir -p /var/log/journal
   systemd-tmpfiles --create --prefix /var/log/journal
-  systemctl restart systemd-journald || warn "journald restart failed (non-fatal)"
+  JOURNAL_CHANGED=1
 else
   ok  "Persistent journal already configured"
+fi
+
+# Install / refresh our size-cap drop-in.  Compare against the source first
+# so we don't pointlessly restart journald on every re-run.
+install -d -m 0755 "${JOURNAL_DROPIN_DIR}"
+SRC_DROPIN="$(dirname "$0")/config/journald-ais-server.conf"
+[[ -f "${INSTALL_DIR}/config/journald-ais-server.conf" ]] \
+  && SRC_DROPIN="${INSTALL_DIR}/config/journald-ais-server.conf"
+if [[ -f "${SRC_DROPIN}" ]]; then
+  if ! cmp -s "${SRC_DROPIN}" "${JOURNAL_DROPIN}"; then
+    log "Installing journald size-cap drop-in -> ${JOURNAL_DROPIN}"
+    install -m 0644 "${SRC_DROPIN}" "${JOURNAL_DROPIN}"
+    JOURNAL_CHANGED=1
+  else
+    ok  "journald size-cap drop-in already up-to-date"
+  fi
+else
+  warn "${SRC_DROPIN} not found – skipping journald size-cap drop-in"
+fi
+
+if [[ "${JOURNAL_CHANGED}" == "1" ]]; then
+  systemctl restart systemd-journald || warn "journald restart failed (non-fatal)"
 fi
 
 # ----------------------------------------------------------------------------
