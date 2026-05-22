@@ -18,6 +18,23 @@ from ..forwarder import ForwarderManager
 bp = Blueprint("api", __name__)
 
 
+@bp.after_request
+def _no_cache(resp):
+    """Forbid every browser from caching JSON API responses.
+
+    Without this, iOS WebKit (Safari and "Chrome" on iPhone, which is just
+    Safari under the hood) applies *heuristic freshness* to same-origin
+    fetches and reuses a single /api/status payload for ~30 s.  The visible
+    symptom on the Nodes page is a `last_seen` value that's permanently
+    "30-35 s ago" instead of refreshing every 2 s like it does on desktop
+    Chrome.  Belt-and-braces: client side also appends a cache-buster.
+    """
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
+
 # ---------------------------------------------------------------------------
 # Status / stats
 # ---------------------------------------------------------------------------

@@ -4,16 +4,34 @@
  * namespace.
  */
 (function () {
+  /* Belt-and-braces cache-buster: iOS WebKit (Safari + "Chrome" on iPhone)
+   * applies heuristic freshness to any same-origin GET that lacks an
+   * explicit Cache-Control header and serves stale JSON for ~30 s.  The
+   * server now sets `Cache-Control: no-store` on every /api/* response,
+   * but we also append a `_=<ms>` query param to GETs as a second line of
+   * defence – the URL changes every call so even an over-eager cache can't
+   * match a previous entry. */
   const api = async (path, opts = {}) => {
-    const res = await fetch('/api' + path, {
-      headers: { 'Content-Type': 'application/json' },
+    const method = (opts.method || 'GET').toUpperCase();
+    let url = '/api' + path;
+    if (method === 'GET') {
+      url += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+    }
+    const res = await fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
       credentials: 'same-origin',
+      cache: 'no-store',
       ...opts,
     });
     const ct = res.headers.get('content-type') || '';
     if (ct.includes('application/json')) return res.json();
     return res.text();
   };
+
 
   const fmtTime = ts => {
     if (!ts) return '—';
