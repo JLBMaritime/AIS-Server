@@ -62,6 +62,37 @@
   const el = sel => document.querySelector(sel);
   const setText = (sel, v) => { const e = el(sel); if (e) e.textContent = v; };
 
+  /* Convert an IPv4 string into a numeric tuple so "10.0.0.2" sorts
+   * before "10.0.0.10" instead of after it (which is what a naive string
+   * compare would give us).  Falls back to the lower-cased string for
+   * hostnames / IPv6 / Tailscale MagicDNS names so they still sort
+   * sensibly. */
+  function ipKey(s) {
+    if (!s) return [Infinity];
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s.trim());
+    if (m) return [0, +m[1], +m[2], +m[3], +m[4]];
+    // Sentinel "1" puts hostnames after IPv4 addresses, then plain string
+    // compare for stable order.  Numeric-aware localeCompare handles
+    // "node-2" vs "node-10" too.
+    return [1, s.toLowerCase()];
+  }
+  function cmpIpKey(a, b) {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const da = a[i], db = b[i];
+      if (da === undefined) return -1;
+      if (db === undefined) return  1;
+      if (typeof da === 'number' && typeof db === 'number') {
+        if (da !== db) return da - db;
+      } else {
+        const r = String(da).localeCompare(String(db),
+                          undefined, { numeric: true });
+        if (r !== 0) return r;
+      }
+    }
+    return 0;
+  }
+
+
   // ------------------- SYSTEM-INFO HELPERS -------------------
   // Banner colours come from the diskcheck "state" field: ok | warn | low.
   // We re-use these on both the Dashboard (top-of-page) and System pages.
@@ -156,6 +187,12 @@
 
       const ndBody = el('#node-tbl tbody');
       if (ndBody) {
+        // Stable order keyed off the Peer (IP) column so rows don't jump
+        // around every time a new sentence arrives.  Server-side default
+        // is "connected first, most-recent last_seen first" – useful for
+        // the API/CLI but jarring in the live UI table.
+        s.nodes.sort((a, b) =>
+          cmpIpKey(ipKey(a.peer || ''), ipKey(b.peer || '')));
         ndBody.innerHTML = s.nodes.map(n =>
           `<tr><td>${n.peer}</td>
              <td>${n.connected
@@ -172,6 +209,19 @@
   async function refreshNodes() {
     const s = await api('/status');
     const body = el('#nodes-tbl tbody');
+    // Keep the table in a stable, human-friendly order keyed off the
+    // Node column.  The Node column shows `source_id` when known,
+    // otherwise the host IP, so the sort key mirrors that.  Numeric-aware
+    // localeCompare handles names like "node-2" vs "node-10".
+    s.nodes.sort((a, b) => {
+      const la = (a.source_id || a.host || a.peer || '').toLowerCase();
+      const lb = (b.source_id || b.host || b.peer || '').toLowerCase();
+      // If both look like plain IPv4 addresses, sort numerically so
+      // 10.0.0.2 comes before 10.0.0.10.
+      const ka = ipKey(la), kb = ipKey(lb);
+      if (ka[0] === 0 && kb[0] === 0) return cmpIpKey(ka, kb);
+      return la.localeCompare(lb, undefined, { numeric: true });
+    });
     body.innerHTML = s.nodes.map(n => {
       const label = n.source_id
         ? `${n.source_id} <span class="muted small">(${n.host})</span>`
