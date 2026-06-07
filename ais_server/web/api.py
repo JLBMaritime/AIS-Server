@@ -80,6 +80,7 @@ def endpoints_add():
             protocol=(data.get("protocol") or "tcp").lower(),
             path=data.get("path"),
             enabled=bool(data.get("enabled", True)),
+            broadcast=bool(data.get("broadcast", False)),
         )
     except KeyError as k:
         return jsonify({"ok": False, "error": f"missing field: {k}"}), 400
@@ -98,6 +99,8 @@ def endpoints_update(ep_id: int):
             data["port"] = int(data["port"])
         except ValueError:
             return jsonify({"ok": False, "error": "bad port"}), 400
+    if "broadcast" in data:
+        data["broadcast"] = bool(data["broadcast"])
     ok = db.update_endpoint(ep_id, **data)
     return jsonify({"ok": ok})
 

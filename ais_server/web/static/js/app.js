@@ -220,11 +220,17 @@
   }
 
   // ------------------- ENDPOINTS -------------------
+  /* The Protocol column shows "udp (bcast)" when an endpoint is UDP with
+   * broadcast enabled.  We keep that flag inside the Protocol cell rather
+   * than adding a new column so the table layout doesn't change. */
   async function refreshEndpoints() {
     const list = await api('/endpoints');
     const body = el('#ep-tbl tbody');
-    body.innerHTML = list.map(e =>
-      `<tr><td>${e.name}</td><td>${e.protocol}</td>
+    body.innerHTML = list.map(e => {
+      const proto = e.protocol === 'udp' && e.broadcast
+        ? 'udp <span class="muted small">(bcast)</span>'
+        : e.protocol;
+      return `<tr><td>${e.name}</td><td>${proto}</td>
          <td>${e.host}</td><td>${e.port}</td>
          <td>${e.enabled ? 'yes' : 'no'}</td>
          <td>
@@ -232,9 +238,21 @@
            <button class="small" onclick="ais.epTest(${e.id})">Test</button>
            <button class="small" onclick="ais.epToggle(${e.id}, ${e.enabled ? 0 : 1})">${e.enabled ? 'Disable' : 'Enable'}</button>
            <button class="small danger" onclick="ais.epDelete(${e.id})">Delete</button>
-         </td></tr>`
-    ).join('') || '<tr><td colspan="6" class="muted">No endpoints yet.</td></tr>';
+         </td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="muted">No endpoints yet.</td></tr>';
   }
+
+  /* Show / hide the "Broadcast" checkbox depending on whether the user has
+   * selected the UDP protocol.  When the field becomes hidden we also
+   * untick it so a stale value can't be submitted accidentally. */
+  function syncBroadcastVisibility(form) {
+    const wrap = el('#bcast-wrap');
+    if (!wrap) return;
+    const isUdp = form.protocol && form.protocol.value === 'udp';
+    wrap.hidden = !isUdp;
+    if (!isUdp && form.broadcast) form.broadcast.checked = false;
+  }
+
 
   // ------------------- LIVE STREAMS -------------------
   /* Both data pages share this implementation; `kind` is "incoming" or
@@ -382,14 +400,24 @@
     endpoints() {
       refreshEndpoints();
       const form = el('#ep-form');
+      // Show / hide the "Broadcast" checkbox the moment the user flips
+      // the protocol picker (also runs once now so the initial TCP state
+      // is reflected correctly when the page loads).
+      syncBroadcastVisibility(form);
+      form.protocol.addEventListener('change',
+                                    () => syncBroadcastVisibility(form));
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const f = new FormData(form);
+        const proto = f.get('protocol');
         const body = {
           name: f.get('name'), host: f.get('host'),
           port: parseInt(f.get('port'), 10),
-          protocol: f.get('protocol'),
+          protocol: proto,
           enabled: f.get('enabled') === 'on',
+          // Only send broadcast for UDP rows; the server stores 0 on
+          // TCP/HTTP rows anyway but this keeps the PATCH payload clean.
+          broadcast: proto === 'udp' && f.get('broadcast') === 'on',
         };
         const id = f.get('id');
         let r;
@@ -410,6 +438,10 @@
       f.id.value = ep.id; f.name.value = ep.name; f.host.value = ep.host;
       f.port.value = ep.port; f.protocol.value = ep.protocol;
       f.enabled.checked = !!ep.enabled;
+      // Populate the broadcast checkbox + show/hide its wrap to match the
+      // newly-selected protocol.
+      if (f.broadcast) f.broadcast.checked = !!ep.broadcast;
+      syncBroadcastVisibility(f);
     },
     async epTest(id) {
       const r = await api('/endpoints/' + id + '/test', { method: 'POST' });
@@ -428,6 +460,8 @@
     clearForm() {
       const f = el('#ep-form');
       f.reset(); f.id.value = ''; f.enabled.checked = true;
+      if (f.broadcast) f.broadcast.checked = false;
+      syncBroadcastVisibility(f);
     },
     dataIn()  { startStream('incoming'); },
     dataOut() { startStream('outgoing'); },

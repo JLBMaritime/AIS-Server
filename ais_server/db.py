@@ -43,9 +43,11 @@ CREATE TABLE IF NOT EXISTS endpoints (
     port        INTEGER NOT NULL,
     path        TEXT,                             -- for http
     enabled     INTEGER NOT NULL DEFAULT 1,
+    broadcast   INTEGER NOT NULL DEFAULT 0,       -- udp only: enable SO_BROADCAST
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
+
 
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
@@ -87,6 +89,9 @@ class Endpoint:
     enabled: bool
     created_at: int
     updated_at: int
+    # UDP-only; ignored on tcp/http rows.  Off by default so a typo'd
+    # broadcast address can't accidentally spray the LAN.
+    broadcast: bool = False
 
 
 class Database:
@@ -106,6 +111,29 @@ class Database:
         # libsqlite3 with different defaults can't surprise us.
         self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    # ------------------------------------------------------------------
+    # Schema migrations
+    # ------------------------------------------------------------------
+    def _migrate(self) -> None:
+        """Apply additive schema changes for upgrades from older installs.
+
+        Each step is idempotent (``try/except`` on the column-already-exists
+        error) so we don't need a separate ``user_version`` bookkeeping
+        table for these simple additions.
+        """
+        with self._lock:
+            # endpoints.broadcast – added when UDP was promoted out of
+            # "scaffolded" status.  Default 0 preserves prior behaviour on
+            # any TCP rows that already exist.
+            try:
+                self._conn.execute(
+                    "ALTER TABLE endpoints "
+                    "ADD COLUMN broadcast INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists – nothing to do
 
     # ------------------------------------------------------------------
     # Users
@@ -182,11 +210,18 @@ class Database:
     # Endpoints
     # ------------------------------------------------------------------
     def _row_to_endpoint(self, row: sqlite3.Row) -> Endpoint:
+        # ``broadcast`` is fetched via dict access so a very-old DB that
+        # hasn't been re-opened since the migration still loads cleanly.
+        try:
+            bcast = bool(row["broadcast"])
+        except (IndexError, KeyError):
+            bcast = False
         return Endpoint(
             id=row["id"], name=row["name"], protocol=row["protocol"],
             host=row["host"], port=row["port"], path=row["path"],
             enabled=bool(row["enabled"]),
             created_at=row["created_at"], updated_at=row["updated_at"],
+            broadcast=bcast,
         )
 
     def list_endpoints(self, enabled_only: bool = False) -> List[Endpoint]:
@@ -206,24 +241,29 @@ class Database:
 
     def add_endpoint(self, name: str, host: str, port: int,
                      protocol: str = "tcp", path: Optional[str] = None,
-                     enabled: bool = True) -> int:
+                     enabled: bool = True, broadcast: bool = False) -> int:
         now = int(time.time())
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO endpoints (name, protocol, host, port, path, enabled,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, protocol, host, port, path, 1 if enabled else 0, now, now),
+                " broadcast, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, protocol, host, port, path,
+                 1 if enabled else 0,
+                 1 if broadcast else 0,
+                 now, now),
             )
         return int(cur.lastrowid)
 
     def update_endpoint(self, ep_id: int, **kwargs: Any) -> bool:
-        allowed = {"name", "protocol", "host", "port", "path", "enabled"}
+        allowed = {"name", "protocol", "host", "port", "path",
+                   "enabled", "broadcast"}
         sets = []
         vals: List[Any] = []
         for k, v in kwargs.items():
             if k not in allowed:
                 continue
-            if k == "enabled":
+            if k in ("enabled", "broadcast"):
                 v = 1 if v else 0
             sets.append(f"{k}=?")
             vals.append(v)
@@ -321,6 +361,7 @@ class Database:
                 "id": e.id, "name": e.name, "protocol": e.protocol,
                 "host": e.host, "port": e.port, "path": e.path,
                 "enabled": e.enabled,
+                "broadcast": e.broadcast,
             }
             for e in self.list_endpoints()
         ]

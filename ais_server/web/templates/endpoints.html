@@ -10,11 +10,16 @@
     <input type="text" name="name" placeholder="Name (unique)" required>
     <select name="protocol">
       <option value="tcp" selected>TCP</option>
-      <!-- UDP / HTTP hidden until enabled in config -->
+      <option value="udp">UDP</option>
+      <!-- HTTP hidden until enabled in config -->
     </select>
     <input type="text" name="host" placeholder="Host / IP" required>
     <input type="number" name="port" placeholder="Port" min="1" max="65535" required>
     <label class="inline">Enabled <input type="checkbox" name="enabled" checked></label>
+    <!-- Broadcast wrap is shown only when protocol === 'udp' (handled in app.js).
+         Hidden via the HTML5 hidden attribute so it doesn't take up row space. -->
+    <label id="bcast-wrap" class="inline" hidden>Broadcast
+      <input type="checkbox" name="broadcast"></label>
     <button class="primary" type="submit">Save</button>
     <button type="button" class="small" onclick="ais.clearForm()">Clear</button>
   </form>
@@ -24,6 +29,11 @@
   <thead><tr><th>Name</th><th>Protocol</th><th>Host</th><th>Port</th><th>Enabled</th><th>Actions</th></tr></thead>
   <tbody></tbody>
 </table>
+<p class="muted small">
+  UDP endpoints sending to a broadcast address (e.g. <code>255.255.255.255</code>
+  or <code>192.168.1.255</code>) require the <em>Broadcast</em> box ticked,
+  otherwise the OS rejects the send.
+</p>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

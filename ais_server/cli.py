@@ -160,19 +160,31 @@ app.add_typer(endpoints_app, name="endpoints")
 @endpoints_app.command("list")
 def endpoints_list():
     data = _get("/api/endpoints")
-    t = Table("ID", "Name", "Proto", "Host", "Port", "Enabled")
+    t = Table("ID", "Name", "Proto", "Host", "Port", "Enabled", "Bcast")
     for e in data:
-        t.add_row(str(e["id"]), e["name"], e["protocol"],
-                  e["host"], str(e["port"]), "yes" if e["enabled"] else "no")
+        proto = e["protocol"]
+        # Only show a Bcast column value for UDP rows – on TCP/HTTP the
+        # field is always 0 and would just be noise.
+        bcast = "yes" if e.get("broadcast") and proto == "udp" else \
+                ("—" if proto != "udp" else "no")
+        t.add_row(str(e["id"]), e["name"], proto,
+                  e["host"], str(e["port"]),
+                  "yes" if e["enabled"] else "no", bcast)
     console.print(t)
 
 
 @endpoints_app.command("add")
 def endpoints_add(name: str, host: str, port: int,
                   protocol: str = "tcp",
-                  enabled: bool = True):
+                  enabled: bool = True,
+                  broadcast: bool = typer.Option(
+                      False, "--broadcast/--no-broadcast",
+                      help="UDP only – enable SO_BROADCAST so the kernel "
+                           "accepts broadcast destinations like 255.255.255.255."
+                  )):
     r = _post("/api/endpoints", {"name": name, "host": host, "port": port,
-                                 "protocol": protocol, "enabled": enabled})
+                                 "protocol": protocol, "enabled": enabled,
+                                 "broadcast": broadcast})
     console.print(r)
 
 

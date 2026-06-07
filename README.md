@@ -69,7 +69,7 @@ server):
 | Ingest   | `ingest.py`            | One thread per node; validates NMEA checksum, strips tag-blocks, reassembles multi-part messages. |
 | Dedup    | `dedup.py`             | SHA-1 of the canonicalised sentence keys a `TTLCache` (30 s window). Memorises the first arrival time so duplicates inherit it. |
 | Re-order | `reorder.py`           | Bounded heap (jitter buffer). Holds each sentence for `hold_ms` (default 2000 ms) before releasing it in strict timestamp order. |
-| Fan-out  | `forwarder.py`         | One thread + bounded queue per endpoint. TCP with auto-reconnect + exponential backoff. UDP and HTTP scaffolded. |
+| Fan-out  | `forwarder.py`         | One thread + bounded queue per endpoint. TCP with auto-reconnect + exponential backoff. UDP first-class (optional broadcast). HTTP scaffolded. |
 | Web / API| `web/`                 | Flask + Flask-Login + Socket.IO. 8 pages, ships the dashboard, nodes, Wi-Fi, incoming/outgoing data viewers, endpoint CRUD, system page. |
 | CLI      | `cli.py`               | `aisctl` – same JSON API as the UI. |
 | Runtime  | `supervisor.py`        | Each background task runs in a `SupervisedThread` that restarts on any exception with exponential backoff. A `Watchdog` pings systemd every 10 s (WatchdogSec=60). |
@@ -241,7 +241,7 @@ Browse to `http://<server-ip>/`.  The UI has eight pages:
 | **Nodes**            | All connected / recently-seen AIS nodes with per-node message counts and last-seen. |
 | **Incoming data**    | Live stream of every received sentence (post-dedup).  Filter by node, pause, clear, export. |
 | **Outgoing data**    | Live stream of every sentence forwarded.  Filter by endpoint. |
-| **Endpoints**        | Add / edit / delete / enable / disable / **Test** endpoints.  Status pills show UP/DOWN in real-time. |
+| **Endpoints**        | Add / edit / delete / enable / disable / **Test** endpoints (TCP or UDP).  UDP rows expose a *Broadcast* checkbox that switches the socket into `SO_BROADCAST` mode so destinations like `255.255.255.255` / `192.168.1.255` are accepted by the kernel.  Status pills show UP/DOWN in real-time. |
 | **System**           | Change password, download backup, restart service, reboot Pi. |
 
 The two data viewers use Socket.IO over a `/live` namespace so sentences
@@ -259,6 +259,8 @@ aisctl login                              # prompts for username/password
 aisctl status                             # pipeline + nodes + endpoints
 aisctl endpoints list
 aisctl endpoints add "MarineTraffic" data.aishub.net 4001
+aisctl endpoints add "Chartplotter" 255.255.255.255 10110 \
+       --protocol udp --broadcast              # LAN broadcast on UDP
 aisctl endpoints disable 1
 aisctl endpoints test 1
 aisctl wifi scan

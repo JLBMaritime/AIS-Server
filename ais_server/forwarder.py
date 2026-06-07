@@ -8,7 +8,9 @@ Protocols
 ---------
 * ``tcp`` – persistent client connection; reconnects with exponential backoff
             (capped at 30 s).
-* ``udp`` – fire-and-forget datagrams (scaffolded, disabled in UI by default).
+* ``udp`` – fire-and-forget datagrams.  Per-endpoint ``broadcast`` flag
+            enables ``SO_BROADCAST`` so destinations like ``192.168.1.255``
+            or ``255.255.255.255`` work; otherwise the kernel rejects them.
 * ``http``– POST each batch as ``text/plain`` (scaffolded).
 """
 from __future__ import annotations
@@ -147,11 +149,26 @@ class _EndpointWorker(threading.Thread):
                     self.stats.dropped += 1
 
     # ------------------------------------------------------------------
-    # UDP  (scaffold – not exposed in UI by default)
+    # UDP
     # ------------------------------------------------------------------
     def _run_udp(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if getattr(self.ep, "broadcast", False):
+            # Required by the kernel before sendto() will accept any
+            # address whose host part is all-ones (e.g. 255.255.255.255,
+            # 192.168.1.255).  Harmless on unicast addresses, so we set
+            # it once at startup and forget about it.
+            try:
+                self._sock.setsockopt(socket.SOL_SOCKET,
+                                      socket.SO_BROADCAST, 1)
+            except OSError as exc:
+                log.warning("Forwarder %s: SO_BROADCAST refused (%s)",
+                            self.ep.name, exc)
         self.stats.connected = True
+        # Don't let a permanently bad destination spam the journal one
+        # WARN per datagram – log the first occurrence of each distinct
+        # error message, then drop subsequent identical ones to DEBUG.
+        last_logged_err = ""
         while not self._stop.is_set():
             try:
                 sentence = self.queue.get(timeout=1.0)
@@ -164,13 +181,22 @@ class _EndpointWorker(threading.Thread):
                                   (self.ep.host, self.ep.port))
                 self.stats.sent += 1
                 self.stats.last_send = time.time()
+                self.stats.queue_depth = self.queue.qsize()
                 self.events.publish("outgoing", {
                     "endpoint_id": self.ep.id, "endpoint": self.ep.name,
                     "sentence": sentence, "ts": self.stats.last_send,
                 })
             except OSError as exc:
                 self.stats.errors += 1
-                self.stats.last_error = str(exc)
+                msg = str(exc)
+                self.stats.last_error = msg
+                if msg != last_logged_err:
+                    log.warning("Forwarder %s UDP send failed: %s",
+                                self.ep.name, msg)
+                    last_logged_err = msg
+                else:
+                    log.debug("Forwarder %s UDP send failed (repeat): %s",
+                              self.ep.name, msg)
 
     # ------------------------------------------------------------------
     # HTTP (scaffold)
@@ -250,7 +276,9 @@ class ForwarderManager:
     def _endpoint_match(a: Endpoint, b: Endpoint) -> bool:
         return (a.protocol == b.protocol and a.host == b.host
                 and a.port == b.port and a.path == b.path
-                and a.name == b.name and a.enabled == b.enabled)
+                and a.name == b.name and a.enabled == b.enabled
+                and getattr(a, "broadcast", False)
+                    == getattr(b, "broadcast", False))
 
     # ------------------------------------------------------------------
     def dispatch(self, sentence: str) -> None:
@@ -271,6 +299,7 @@ class ForwarderManager:
                     "protocol": w.ep.protocol,
                     "host": w.ep.host, "port": w.ep.port,
                     "enabled": w.ep.enabled,
+                    "broadcast": getattr(w.ep, "broadcast", False),
                     "connected": s.connected,
                     "sent": s.sent, "dropped": s.dropped, "errors": s.errors,
                     "last_error": s.last_error,
@@ -297,6 +326,9 @@ class ForwarderManager:
                 return True, "Sent"
             if ep.protocol == "udp":
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    if getattr(ep, "broadcast", False):
+                        s.setsockopt(socket.SOL_SOCKET,
+                                     socket.SO_BROADCAST, 1)
                     s.sendto((sentence + "\r\n").encode("ascii"),
                              (ep.host, ep.port))
                 return True, "Sent"
