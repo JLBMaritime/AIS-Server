@@ -252,6 +252,43 @@
       ? `${c.ssid}  —  ${c.ip || 'no IP'}  (${c.state || '—'})`
       : 'Not connected.';
   }
+
+  /* Wired interface (eth0).  Read-only status card – we don't let the
+   * user configure Ethernet from the UI because NetworkManager already
+   * auto-DHCPs it on Bookworm.  Possible UI states:
+   *   - not available on this device              (no eth0 in /sys)
+   *   - cable unplugged                           (link=false)
+   *   - link up, waiting for DHCP…                (link=true, no ip)
+   *   - eth0 — 192.168.1.42  (connected, 1000 Mb/s)
+   */
+  async function refreshEthernet() {
+    const slot = el('#eth-current');
+    if (!slot) return;
+    try {
+      const e = await api('/wifi/ethernet');
+      if (!e || !e.available) {
+        slot.innerHTML = '<span class="muted">Not available on this device.</span>';
+        return;
+      }
+      if (!e.link) {
+        slot.innerHTML =
+          `${e.interface}  —  <span class="pill warn">cable unplugged</span>`;
+        return;
+      }
+      if (!e.ip) {
+        slot.innerHTML =
+          `${e.interface}  —  <span class="pill warn">link up, waiting for DHCP…</span>`;
+        return;
+      }
+      const speed = e.speed_mbps ? `${e.speed_mbps} Mb/s` : '';
+      const bits = [e.state || 'connected', speed].filter(Boolean).join(', ');
+      slot.innerHTML =
+        `${e.interface}  —  ${e.ip}  <span class="pill ok">${bits}</span>`;
+    } catch (err) {
+      slot.innerHTML = '<span class="muted">Status unavailable.</span>';
+    }
+  }
+
   async function refreshWifiScan() {
     const nets = await api('/wifi/scan');
     const body = el('#wifi-scan tbody');
@@ -427,7 +464,11 @@
     },
     nodes()     { refreshNodes();   setInterval(refreshNodes,   2000); },
     wifi() {
+      refreshEthernet();
       refreshWifiCurrent(); refreshWifiScan(); refreshWifiSaved();
+      // Same 5 s cadence as the Wi-Fi card – cheap, and the cable can be
+      // pulled / re-plugged at any time so we want a snappy refresh.
+      setInterval(refreshEthernet, 5000);
       setInterval(refreshWifiCurrent, 5000);
     },
     wifiScan()  { refreshWifiScan(); },

@@ -139,6 +139,13 @@ def wifi_current():
     return jsonify(wifi_mod.current() or {})
 
 
+@bp.get("/wifi/ethernet")
+@login_required
+def wifi_ethernet():
+    """Status of the wired NIC (eth0).  Read-only – the UI just shows it."""
+    return jsonify(wifi_mod.ethernet() or {})
+
+
 @bp.get("/wifi/saved")
 @login_required
 def wifi_saved():
